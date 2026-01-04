@@ -1275,31 +1275,56 @@ Remembering, working, and deciding are orthogonal concerns. Keep them separate s
 
 LegiVellum optimizes for epistemic clarity over maximum distribution; MemoryGate is intentionally centralized. A single source of truth prevents the coordination overhead, eventual consistency problems, and "who has the latest state?" confusion that plague distributed systems. This is not a weakness—it's a deliberate choice that makes the system understandable and trustworthy.
 
-### 4. Pointers Over Payloads
+### 4. Topology Emerges, Architecture Doesn't Require It
+
+**Critical insight:** LegiVellum does not prescribe deployment topology. "Clusters," "tiers," and "departments" are deployment convenience, not architectural requirements.
+
+**The actual model:**
+- Components identify themselves (`recipient_ai`)
+- Components query MemoryGate for their work (polling)
+- Components emit receipts for others to discover
+- Database is the coordination substrate
+
+**What this means:**
+- You can run 1 DeleGate + 1 AsyncGate + 1 MemoryGate in a Docker Compose stack (convenient for development)
+- You can run 10,000 identical `worker.codegen` processes across 1000 machines polling the same database (swarm mode)
+- You can run heterogeneous components anywhere (laptop + AWS + GCP + Raspberry Pi) as long as they reach the same PostgreSQL
+- You can organize components into logical "clusters" for operational convenience, but **the protocol doesn't enforce or require this**
+
+**Why this matters:**
+- No hardcoded topology in the architecture
+- No service discovery needed (database IS the discovery)
+- No cluster management overhead (Kubernetes optional, not required)
+- Horizontal scaling is trivial (just start more workers with same `recipient_ai`)
+- Migration across clouds is seamless (point workers at new database)
+
+**Deployment is orthogonal to protocol.** The receipt ledger coordinates everything. Physical topology is an operational detail, not an architectural constraint.
+
+### 5. Pointers Over Payloads
 
 AsyncGate passes pointers through receipts, doesn't store them. MemoryGate stores receipts with pointers embedded, stores meaning, not raw results. This keeps each primitive focused.
 
-### 5. Uniform Contracts Enable Fractals
+### 6. Uniform Contracts Enable Fractals
 
 DeleGates communicate with each other via the same contract they use with principals. No special cases. This makes nesting and composition trivial.
 
-### 6. Receipts at Boundaries Only
+### 7. Receipts at Boundaries Only
 
 Internal operations (thinking, internal synthesis) don't emit receipts. Only tier boundaries generate receipts. This prevents receipt spam while maintaining accountability.
 
-### 7. Single Writer Principle
+### 8. Single Writer Principle
 
 Only MemoryGate writes to receipt store. All other components POST receipts to MemoryGate. This prevents data corruption and enables schema validation.
 
-### 8. Explicit Is Better Than Implicit
+### 9. Explicit Is Better Than Implicit
 
 Promotion to permanent memory is intentional (agent decides). Result channels are explicit (email/s3/blob). Receipts explicitly chain (caused_by_receipt_id). No magic, no guessing.
 
-### 9. Passivity Is Strength
+### 10. Passivity Is Strength
 
 MemoryGate doesn't volunteer state updates. AsyncGate doesn't interpret pointers. DeleGate doesn't execute plans. Each component does one thing and refuses to do others. This restraint is what makes the system stable.
 
-### 10. Time Is Neutral
+### 11. Time Is Neutral
 
 Because receipts persist, time stops being an enemy. Hours can pass. Sessions can reset. Systems can go idle. Nothing important is lost, because nothing important happens without leaving a receipt behind.
 
