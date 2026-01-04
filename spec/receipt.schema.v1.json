@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legivellum.dev/spec/receipt.schema.v1.json",
+  "title": "LegiVellum Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "A Receipt is the only coordination protocol. It represents an accepted obligation (accepted), a resolution of that obligation (complete), or a boundary/policy crossing that transfers/transforms responsibility (escalate). MemoryGate stores receipts as an immutable audit ledger.",
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "task_id",
+    "parent_task_id",
+    "caused_by_receipt_id",
+    "dedupe_key",
+    "attempt",
+    "from_principal",
+    "for_principal",
+    "source_system",
+    "recipient_ai",
+    "trust_domain",
+    "phase",
+    "status",
+    "realtime",
+    "task_type",
+    "task_summary",
+    "task_body",
+    "inputs",
+    "expected_outcome_kind",
+    "expected_artifact_mime",
+    "outcome_kind",
+    "outcome_text",
+    "artifact_location",
+    "artifact_pointer",
+    "artifact_checksum",
+    "artifact_size_bytes",
+    "artifact_mime",
+    "escalation_class",
+    "escalation_reason",
+    "escalation_to",
+    "retry_requested",
+    "created_at",
+    "stored_at",
+    "started_at",
+    "completed_at",
+    "read_at",
+    "archived_at",
+    "metadata"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Receipt schema version (e.g., '1.0')."
+    },
+    "receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Globally unique receipt identifier. Recommended: ULID (26 chars, sortable, collision-resistant). Client-generated before submission to enable offline operation and idempotent retries."
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable correlation key for the full lifecycle of a task. Query all receipts with the same task_id to reconstruct task history."
+    },
+    "parent_task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "If this task was spawned/delegated from another task, this links to the parent task_id. Otherwise use 'NA'."
+    },
+    "caused_by_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Links to the specific receipt that caused this receipt to exist. Use 'NA' if none."
+    },
+    "dedupe_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Idempotency key for de-duplication. Use 'NA' if not applicable."
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Retry counter. 0 = not applicable; otherwise starts at 1."
+    },
+    "from_principal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Tasker / requester identity."
+    },
+    "for_principal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Intended executor / taskee identity at task definition time."
+    },
+    "source_system": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Component that issued this receipt (e.g., 'asyncgate', 'delegate', 'worker.xyz')."
+    },
+    "recipient_ai": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Inbox owner who must see/act on this receipt."
+    },
+    "trust_domain": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional label for routing/audit. Use 'NA' if not applicable."
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["accepted", "complete", "escalate"],
+      "description": "Lifecycle/event type. 'accepted' creates an obligation; 'complete' resolves it; 'escalate' transfers/transforms responsibility."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["NA", "success", "failure", "canceled"],
+      "description": "Completion disposition. Must be non-NA when phase='complete'."
+    },
+    "realtime": {
+      "type": "boolean",
+      "description": "Hint only. True if intended to run 'now'; false for queued/async work."
+    },
+    "task_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional classifier (e.g., 'write_doc', 'run_build'). Use 'NA' if not applicable."
+    },
+    "task_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short human-readable title."
+    },
+    "task_body": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Full task description/prompt."
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Structured inputs including pointers. Empty object allowed.",
+      "additionalProperties": true
+    },
+    "expected_outcome_kind": {
+      "type": "string",
+      "enum": ["NA", "none", "response_text", "artifact_pointer", "mixed"],
+      "description": "What the task is expected to produce."
+    },
+    "expected_artifact_mime": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Expected MIME type if artifact is expected; else 'NA'."
+    },
+    "outcome_kind": {
+      "type": "string",
+      "enum": ["NA", "none", "response_text", "artifact_pointer", "mixed"],
+      "description": "What the completion actually produced."
+    },
+    "outcome_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Text outcome if applicable; else 'NA'."
+    },
+    "artifact_location": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Literal pointer/path to artifact (any valid URI)."
+    },
+    "artifact_pointer": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque pointer/URI to artifact."
+    },
+    "artifact_checksum": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Checksum or 'NA'."
+    },
+    "artifact_size_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Artifact size in bytes. 0 if NA."
+    },
+    "artifact_mime": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Actual artifact MIME type or 'NA'."
+    },
+    "escalation_class": {
+      "type": "string",
+      "enum": ["NA", "owner", "capability", "trust", "policy", "scope", "other"],
+      "description": "Why escalation occurred. Must be non-NA when phase='escalate'."
+    },
+    "escalation_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable reason for escalation."
+    },
+    "escalation_to": {
+      "type": "string",
+      "minLength": 1,
+      "description": "New owner/recipient if crossing an ownership boundary; else 'NA'."
+    },
+    "retry_requested": {
+      "type": "boolean",
+      "description": "True when this escalation is asking for a retry."
+    },
+    "created_at": {
+      "description": "Issuer clock time when receipt was formed.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+    "stored_at": {
+      "description": "MemoryGate clock time when receipt was persisted.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+    "started_at": {
+      "description": "Execution start time if applicable; else 'NA'.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+    "completed_at": {
+      "description": "Completion time. Must be a date-time when phase='complete'.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+    "read_at": {
+      "description": "Inbox read time or 'NA'.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+    "archived_at": {
+      "description": "Archive time or 'NA'.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Freeform metadata. Empty object allowed.",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "phase": { "const": "accepted" } }
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "NA" },
+          "completed_at": { "oneOf": [{ "type": "string", "enum": ["NA"] }] },
+          "task_summary": { "not": { "enum": ["TBD"] } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "complete" } }
+      },
+      "then": {
+        "properties": {
+          "status": { "enum": ["success", "failure", "canceled"] },
+          "completed_at": { "oneOf": [{ "type": "string", "format": "date-time" }] },
+          "outcome_kind": { "enum": ["none", "response_text", "artifact_pointer", "mixed"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "escalate" } }
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "NA" },
+          "escalation_class": { "enum": ["owner", "capability", "trust", "policy", "scope", "other"] },
+          "escalation_reason": { "not": { "enum": ["TBD"] } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "const": "escalate" },
+          "escalation_class": { "const": "owner" }
+        },
+        "required": ["phase", "escalation_class"]
+      },
+      "then": {
+        "properties": {
+          "escalation_to": { "not": { "enum": ["NA"] } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "const": "complete" },
+          "outcome_kind": { "enum": ["artifact_pointer", "mixed"] }
+        },
+        "required": ["phase", "outcome_kind"]
+      },
+      "then": {
+        "properties": {
+          "artifact_pointer": { "not": { "enum": ["NA"] } },
+          "artifact_location": { "not": { "enum": ["NA"] } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "retry_requested": { "const": true } }
+      },
+      "then": {
+        "properties": { "attempt": { "minimum": 1 } }
+      }
+    }
+  ]
+}

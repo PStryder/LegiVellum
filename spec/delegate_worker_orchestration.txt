@@ -1,0 +1,2127 @@
+# DeleGate - Self-Documenting Delegation & Worker Orchestration
+
+**Created:** 2026-01-03  
+**Updated:** 2026-01-04 (Receipt Protocol Integration)  
+**Status:** Design / Concept
+
+**See `trilogy_recursive_cognition_architecture.md` for system-level context.**  
+**See `receipt_protocol.md` for universal receipt specification.**
+
+---
+
+## Core Value Proposition
+
+**DeleGate is a pure planner: it consumes intent and emits a Plan. Execution is always performed by Workers via AsyncGate, and meaning is always recorded in MemoryGate.**
+
+Takes high-level intent from a "principal" AI, decomposes it into a structured Plan, and returns it upstream.
+
+**Not:** A task queue. Not long-term memory. Not an execution engine. Not a result aggregator.  
+**Actually:** A **pure planner** - produces structured Plans, nothing else.
+
+**DeleGates only ever produce Plans. Everything else becomes a corollary.**
+
+**Critical Property:** DeleGate is **stackable** - a composable delegation node that can accept orders from principals or other DeleGates, delegate to MCP workers (including other DeleGates), and report outcomes via MemoryGate and AsyncGate without assuming its position in the hierarchy.
+
+**The Key Insight:** Workers are not "types" - workers are self-describing MCP servers. And **DeleGate itself is a worker** that exposes delegation tools.
+
+DeleGate builds a live registry by introspection, not hardcoded configuration. Each worker announces what it can do via its MCP tool manifest. DeleGate routes intent to capability dynamically.
+
+**Fractal Property:** A DeleGate instance can be top-level (general manager), mid-level (department), or leaf-level (specialized domain). DeleGates communicate via same contract at all tiers - no special-casing. This enables arbitrary nesting, swappable tiers, independent scaling, and zero tight coupling.
+
+---
+
+## Worker Definition (Critical Boundary)
+
+**The Discriminator:** If it can create new tasks for other components, it's a DeleGate. If it can only execute what it's given, it's a Worker.
+- Route subtasks to other workers
+- Decide which other worker should do anything
+
+**That's DeleGate's job.**
+
+### Worker Interfaces
+
+Every Worker exposes:
+
+**1. Self-Description**
+
+```python
+@mcp.tool()
+def worker_bootstrap():
+    """
+    Returns worker manifest + tool schemas.
+    
+    Returns:
+        worker_id: Unique identifier
+        tools: [{name, input_schema, output_schema}]
+        capabilities: [tags for discovery]
+        constraints: {max_payload_bytes, timeout_seconds, rate_limit}
+        hints: {latency_band, cost_band, expected_runtime}
+        side_effects: {filesystem, network, execution}
+        trust: {tier, signature, key_id}
+    """
+```
+
+**2. Execution Tools**
+
+Each tool is either:
+- **Direct:** Returns output synchronously (fast, <5s)
+- **Async-capable:** Worker manages its own internal job lifecycle
+
+```python
+# Direct execution
+@mcp.tool()
+def analyze_sentiment(text: str):
+    """Fast synchronous analysis, returns immediately"""
+    result = run_model(text)
+    return {"sentiment": "positive", "confidence": 0.95}
+
+# Async-capable (worker manages internal lifecycle)
+@mcp.tool()
+def start_document_index(path: str):
+    """
+    Start long-running index job internally.
+    Worker manages its own job, returns job_id for tracking.
+    """
+    job_id = worker.spawn_internal_job(index_documents, path)
+    return {"job_id": job_id, "estimated_duration_seconds": 3600}
+
+@mcp.tool()
+def get_job_status(job_id: str):
+    """Check status of internally-managed job"""
+    return worker.get_job_status(job_id)
+
+@mcp.tool()
+def get_job_result(job_id: str):
+    """Retrieve result from completed internal job"""
+    return worker.get_job_result(job_id)
+```
+
+### How Async Works Without Delegation
+
+Workers execute long-running work in two ways:
+
+**Option A (Preferred): AsyncGate Assigns → Worker Runs**
+
+```
+DeleGate queues task into AsyncGate
+    ↓
+Worker leases task from AsyncGate
+    ↓
+Worker executes (internally, no delegation)
+    ↓
+Worker reports progress via heartbeats
+    ↓
+Worker completes with result_pointer
+    ↓
+AsyncGate posts receipt to MemoryGate
+```
+
+Worker is doing the work. AsyncGate provides lifecycle management (lease, heartbeat, complete), not delegation.
+
+**Option B: Direct Call → Worker Runs Internally**
+
+```
+DeleGate calls worker.start_X()
+    ↓
+Worker spins local job (thread/process)
+    ↓
+Worker returns job_id immediately
+    ↓
+DeleGate (or Principal) can poll: worker.get_job_status(job_id)
+    ↓
+When complete: worker.get_job_result(job_id)
+```
+
+Worker is still the one doing the work. No routing elsewhere.
+
+**Option A is preferred** because:
+- AsyncGate centralizes pointer registry
+- Unified receipt mechanism via MemoryGate
+- Standard lease/heartbeat protocol
+- Worker doesn't need to implement job tracking
+
+### AsyncGate Is Not Delegation
+
+**AsyncGate is the execution envelope / rope.**
+
+Workers execute long-running work **under AsyncGate's lifecycle** (lease/heartbeat/complete), and return a result pointer.
+
+Workers cannot:
+- Create tasks in AsyncGate intended for other workers
+- Route work to other workers
+- Decompose their assigned task into subtasks for others
+
+If a component needs to decompose and route, it's a DeleGate, not a Worker.
+
+### Examples
+
+**Valid Worker (Direct):**
+
+```python
+# sentiment-analyzer-worker
+@mcp.tool()
+def analyze_sentiment(text: str):
+    """Direct execution, returns immediately"""
+    result = run_model(text)
+    return {"sentiment": "positive", "confidence": 0.95}
+```
+
+**Valid Worker (Async via AsyncGate):**
+
+```python
+# pdf-indexer-worker
+# Registered with AsyncGate, processes tasks from queue
+
+def process_task(task):
+    """Worker leases from AsyncGate, executes, completes"""
+    params = task.params
+    
+    # Do the work (internally, no delegation)
+    index_results = index_all_pdfs(params['path'])
+    
+    # Store result
+    result_pointer = upload_to_s3(index_results)
+    
+    # Complete task
+    asyncgate.complete_task(
+        task_id=task.task_id,
+        result_pointer=result_pointer,
+        summary=f"Indexed {len(index_results)} PDFs"
+    )
+```
+
+**Valid Worker (Async Internally):**
+
+```python
+# video-transcoder-worker
+@mcp.tool()
+def start_transcode(video_path: str, format: str):
+    """Start internal transcoding job"""
+    job_id = spawn_ffmpeg_process(video_path, format)
+    return {
+        "job_id": job_id,
+        "estimated_duration_seconds": 1800
+    }
+
+@mcp.tool()
+def get_transcode_status(job_id: str):
+    return check_ffmpeg_status(job_id)
+
+@mcp.tool()
+def get_transcode_result(job_id: str):
+    result_path = get_ffmpeg_output(job_id)
+    return {"result_pointer": f"file:{result_path}"}
+```
+
+**INVALID Worker (This is a DeleGate):**
+
+```python
+# WRONG - This is delegation, not execution
+@mcp.tool()
+def analyze_codebase(repo_path: str):
+    # This is decomposing and routing - NOT a worker!
+    asyncgate.queue_task("scan_files", {"path": repo_path})  # ✗ WRONG
+    asyncgate.queue_task("analyze_complexity", {...})        # ✗ WRONG
+    asyncgate.queue_task("detect_issues", {...})             # ✗ WRONG
+    # This should be a DeleGate, not a Worker
+```
+
+If your "worker" needs to create tasks for other components, **it's actually a DeleGate.**
+
+---
+
+## Worker Discovery & Registration
+
+Workers are MCP servers that announce themselves to DeleGate:
+
+```python
+# Worker registers with DeleGate
+POST /workers/register
+{
+    "worker_id": "code-analyzer-001",
+    "endpoint": "https://code-analyzer.example.com/mcp",
+    "tools": [
+        {
+            "name": "analyze_repository",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {"type": "string"},
+                    "language": {"type": "string"}
+                }
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "complexity_score": {"type": "number"},
+                    "issues": {"type": "array"}
+                }
+            }
+        }
+    ],
+    "capabilities": ["code_analysis", "python", "javascript"],
+    "constraints": {
+        "max_payload_bytes": 10485760,
+        "timeout_seconds": 300,
+        "rate_limit_per_hour": 100
+    },
+    "hints": {
+        "latency_band": "medium",  # fast/medium/slow
+        "cost_band": "low",        # free/low/medium/high
+        "expected_runtime": "long" # fast (<5s) / medium (<60s) / long (>60s)
+    },
+    "trust": {
+        "tier": "verified",  # trusted/verified/sandbox/untrusted
+        "signature": "...",
+        "key_id": "..."
+    }
+}
+```
+
+DeleGate stores this in its registry. No hardcoded worker types.
+
+**Discovery Methods:**
+
+1. **Push Registration:** Workers POST to DeleGate on startup
+2. **Pull Discovery:** DeleGate polls known MCP endpoints
+3. **Service Registry:** Workers register in Consul/etcd, DeleGate watches
+4. **Static Config:** Bootstrap file for critical workers
+
+**Health Checks:**
+
+```python
+# Periodic heartbeat
+POST /workers/{worker_id}/heartbeat
+{
+    "status": "healthy",
+    "current_load": 0.3,  # 0.0-1.0
+    "available": true
+}
+```
+
+### Intent → Plan Generation
+
+Principal AI sends high-level intent, DeleGate produces structured Plan:
+
+```python
+# Principal request to DeleGate
+POST /delegate/plan
+{
+    "principal_ai": "Kee",
+    "intent": "Analyze the Python codebase at /path/to/repo and suggest optimizations",
+    "context": {
+        "language": "python",
+        "priority": "high",
+        "memory_refs": ["obs-123", "pattern-45"]  # Optional grounding
+    }
+}
+
+# DeleGate response (PLAN ONLY)
+{
+    "plan_id": "plan-550e8400",
+    "delegate_id": "code-dept-delegate",
+    "principal_ai": "Kee",
+    "intent": "Analyze the Python codebase at /path/to/repo and suggest optimizations",
+    "created_at": "2026-01-03T22:00:00Z",
+    "scope": "code_analysis",
+    "confidence": 0.9,
+    "assumptions": ["Repository is Python 3.8+", "Code follows PEP 8"],
+    
+    "steps": [
+        {
+            "step_id": "step-1",
+            "step_type": "queue_execution",  # Async via AsyncGate
+            "worker_id": "code-analyzer-001",
+            "tool_name": "analyze_repository",
+            "params": {
+                "repo_path": "/path/to/repo",
+                "language": "python"
+            },
+            "depends_on": [],
+            "estimated_runtime_seconds": 300
+        },
+        {
+            "step_id": "step-2",
+            "step_type": "wait_for",  # Wait for async completion
+            "wait_for_step_ids": ["step-1"],
+            "wait_for_receipts": []  # Will be filled when step-1 posts receipt
+        },
+        {
+            "step_id": "step-3",
+            "step_type": "call_worker",  # Direct execution
+            "worker_id": "optimization-suggester-002",
+            "tool_name": "suggest_optimizations",
+            "params": {
+                "analysis_pointer": "{{step-1.result_pointer}}"  # Reference to AsyncGate pointer
+            },
+            "depends_on": ["step-2"]
+        },
+        {
+            "step_id": "step-4",
+            "step_type": "aggregate",  # Synthesis instruction for Principal
+            "aggregate_step_ids": ["step-1", "step-3"],
+            "synthesis_instructions": "Combine analysis findings with optimization suggestions into actionable report",
+            "executor": "principal"  # Principal performs synthesis, not DeleGate
+        },
+        {
+            "step_id": "step-5",
+            "step_type": "escalate",  # Final report
+            "report_summary": "Code analysis and optimization suggestions complete",
+            "decision_required": false,
+            "recommendation": "Review suggestions and implement high-priority optimizations"
+        }
+    ],
+    
+    "references": {
+        "inputs": {
+            "memory_ids": [123, 45],  # Grounding from MemoryGate
+            "concept_names": ["python_best_practices", "optimization_patterns"]
+        },
+        "expected_outputs": {
+            "async_task_ids": [],  # Will be filled when steps queued
+            "result_pointers": ["{{step-1.result_pointer}}", "{{step-3.result_pointer}}"]
+        }
+    },
+    
+    "estimated_total_runtime_seconds": 420,
+    "can_run_parallel": false  # step-3 depends on step-1
+}
+```
+
+**What DeleGate Did (Plan Generation Logic):**
+
+1. **Intent Analysis:** Parsed request, extracted entities ("Python codebase", "analyze", "optimize")
+2. **Capability Matching:** Found code-analyzer-001 (has "python" capability) and optimization-suggester-002
+3. **Decomposition:** Broke complex intent into atomic steps (analyze → wait → suggest → aggregate → escalate)
+4. **Mode Selection:** Step-1 is long (300s) → queue_execution. Step-3 is fast → call_worker
+5. **Dependency Resolution:** Step-3 depends on step-1 results (sequential execution)
+6. **Synthesis Planning:** Created aggregate step for Principal to perform (DeleGate doesn't aggregate)
+7. **Validation:** Ensured params conform to worker tool schemas
+
+**What DeleGate Did NOT Do:**
+
+- ✗ Execute any worker tools
+- ✗ Queue tasks in AsyncGate (Plan contains instructions to do so)
+- ✗ Access or aggregate results
+- ✗ Make API calls to workers
+- ✗ Store anything in MemoryGate beyond operational trace
+
+**DeleGate emitted Plan. Principal executes Plan.**
+
+### Plan Execution (Principal's Responsibility)
+
+Principal receives Plan and executes it:
+
+```python
+# Principal executes Plan (not DeleGate)
+plan = delegate.create_delegation_plan(intent=...)
+
+for step in plan.steps:
+    if step.step_type == "queue_execution":
+        # Principal queues in AsyncGate
+        task_id = asyncgate.queue_task(
+            task_type=f"mcp_worker_{step.worker_id}",
+            params=step.params,
+            recipient_ai=principal_ai
+        )
+        plan.references.expected_outputs.async_task_ids.append(task_id)
+    
+    elif step.step_type == "call_worker":
+        # Principal calls worker directly
+        result = mcp_client.call_tool(
+            endpoint=workers[step.worker_id].endpoint,
+            tool=step.tool_name,
+            params=step.params
+        )
+    
+    elif step.step_type == "wait_for":
+        # Principal waits for receipts in MemoryGate inbox
+        bootstrap = memory_bootstrap()
+        # Check for receipts matching wait_for criteria
+    
+    elif step.step_type == "aggregate":
+        # Principal performs synthesis
+        combined = synthesize_results(step.aggregate_step_ids)
+    
+    elif step.step_type == "escalate":
+        # Principal receives final report
+        return step.report_summary
+```
+
+**Clean Division:**
+- **DeleGate:** Pure planner (produces Plan)
+- **Principal:** Plan executor (performs steps)
+- **Workers:** Task executors (do the work)
+- **AsyncGate:** Execution envelope (lifecycle + pointers)
+- **MemoryGate:** Meaning + receipts (permanent knowledge)
+    "can_run_parallel": false  # step-2 depends on step-1
+}
+```
+
+**Plan Generation Logic:**
+
+1. **Intent Analysis:** Parse request, extract entities/verbs/constraints
+2. **Capability Matching:** Find workers with relevant tools (fuzzy match on capabilities)
+3. **Decomposition:** Break complex intent into atomic tool calls
+4. **Dependency Resolution:** Determine which steps must be sequential
+5. **Mode Selection:** Direct (fast) vs Async (long-running) based on hints
+6. **Validation:** Ensure params conform to worker tool schemas
+
+**DeleGate can run on a smaller model** - it's doing fuzzy routing and light synthesis, not deep reasoning.
+
+### 3. Routing & Dispatch
+
+DeleGate executes the plan:
+
+**For Direct (Fast) Work:**
+
+```python
+# DeleGate calls worker MCP tool directly
+response = await mcp_client.call_tool(
+    endpoint=worker.endpoint,
+    tool_name=step.tool_name,
+    params=step.params
+)
+
+result_envelope = {
+    "plan_id": plan_id,
+    "step_id": step.step_id,
+    "worker_id": worker.worker_id,
+    "tool_name": step.tool_name,
+    "status": "complete",
+    "payload": response.result,
+    "provenance": {
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "duration_seconds": duration
+    }
+}
+```
+
+**For Async (Long-Running) Work:**
+
+```python
+# DeleGate routes through AsyncGate
+task_id = await asyncgate.queue_task(
+    task_type="mcp_worker_call",
+    params={
+        "worker_id": step.worker_id,
+        "tool_name": step.tool_name,
+        "params": step.params
+    },
+    recipient_ai=principal_ai
+)
+
+result_envelope = {
+    "plan_id": plan_id,
+    "step_id": step.step_id,
+    "worker_id": worker.worker_id,
+    "tool_name": step.tool_name,
+    "status": "async_queued",
+    "async_task_id": task_id,
+    "result_pointer": None,  # Filled in when complete
+    "provenance": {
+        "queued_at": queued_at
+    }
+}
+```
+
+AsyncGate becomes the source of truth for the artifact pointer.
+
+### 4. Aggregation & Escalation
+
+DeleGate receives worker outputs, normalizes into standard envelopes, returns concise report to principal:
+
+```python
+# All steps complete
+{
+    "plan_id": "plan-550e8400",
+    "status": "complete",
+    "summary": "Analyzed Python codebase (15,000 lines) and generated 12 optimization suggestions",
+    "results": [
+        {
+            "step_id": "step-1",
+            "worker_id": "code-analyzer-001",
+            "status": "complete",
+            "key_findings": {
+                "complexity_score": 7.2,
+                "issues_found": 23
+            }
+        },
+        {
+            "step_id": "step-2",
+            "worker_id": "optimization-suggester-002",
+            "status": "complete",
+            "suggestions_count": 12,
+            "result_pointer": "s3://bucket/optimizations-xyz.json"
+        }
+    ],
+    "next_actions": [
+        "Review optimization suggestions via result_pointer",
+        "Store key findings in MemoryGate for future reference"
+    ]
+}
+```
+
+**Aggregation Strategies:**
+
+- **Sequential:** Wait for all steps, return complete report
+- **Progressive:** Stream results as each step completes
+- **Partial Success:** Return what completed successfully, flag failures
+- **Escalation:** If critical step fails, immediately notify principal
+
+---
+
+## Standard Data Structures
+
+### WorkerManifest
+
+```python
+{
+    "worker_id": "string (unique)",
+    "endpoint": "string (MCP server URL)",
+    "tools": [
+        {
+            "name": "string",
+            "description": "string",
+            "input_schema": JSONSchema,
+            "output_schema": JSONSchema
+        }
+    ],
+    "capabilities": ["string"],  # Tags for fuzzy matching
+    "constraints": {
+        "max_payload_bytes": int,
+        "timeout_seconds": int,
+        "rate_limit_per_hour": int
+    },
+    "hints": {
+        "latency_band": "fast|medium|slow",
+        "cost_band": "free|low|medium|high",
+        "expected_runtime": "fast|medium|long"
+    },
+    "trust": {
+        "tier": "trusted|verified|sandbox|untrusted",
+        "signature": "string (optional)",
+        "key_id": "string (optional)"
+    },
+    "registered_at": "timestamp",
+    "last_heartbeat": "timestamp"
+}
+```
+
+### Plan (DeleGate Output - Structured Instructions)
+
+A Plan is a structured bundle of instructions with references. DeleGates produce Plans and nothing else.
+
+```python
+{
+    # 1. Plan Metadata
+    "plan_id": "string (UUID)",
+    "delegate_id": "string (which DeleGate created this)",
+    "principal_ai": "string (who requested it)",
+    "intent": "string (original request)",
+    "created_at": "timestamp",
+    "scope": "string (domain/department)",
+    "confidence": float,  # 0.0-1.0 (optional)
+    "assumptions": ["string"],  # Optional explicit assumptions
+    
+    # 2. Steps (Structured Instructions)
+    "steps": [
+        {
+            "step_id": "string",
+            "step_type": "call_worker|queue_execution|wait_for|aggregate|escalate",
+            
+            # For call_worker (direct synchronous execution)
+            "worker_id": "string",
+            "tool_name": "string",
+            "params": dict,
+            
+            # For queue_execution (async via AsyncGate)
+            "worker_id": "string",
+            "tool_name": "string", 
+            "params": dict,
+            "estimated_runtime_seconds": int,
+            
+            # For wait_for (await completion)
+            "wait_for_step_ids": ["step_id"],
+            "wait_for_receipts": ["receipt_id"],  # MemoryGate receipts
+            
+            # For aggregate (request synthesis)
+            "aggregate_step_ids": ["step_id"],
+            "synthesis_instructions": "string (how to combine results)",
+            "executor": "principal|self",  # Who performs aggregation
+            
+            # For escalate (deliver report upstream)
+            "report_summary": "string",
+            "decision_required": bool,
+            "recommendation": "string (optional)",
+            
+            # Common fields
+            "depends_on": ["step_id"],
+            "expected_output_schema_ref": "string"
+        }
+    ],
+    
+    # 3. References (Hyperlinks to Context)
+    "references": {
+        "inputs": {
+            "memory_ids": ["int"],  # MemoryGate observation/pattern IDs
+            "receipt_ids": ["string"],  # MemoryGate inbox receipt IDs
+            "concept_names": ["string"]  # MemoryGate concepts
+        },
+        "expected_outputs": {
+            "async_task_ids": ["string"],  # AsyncGate task IDs (once queued)
+            "result_pointers": ["string"]  # Placeholders for future pointers
+        }
+    },
+    
+    # Execution estimates
+    "estimated_total_runtime_seconds": int,
+    "can_run_parallel": bool,
+    "execution_cost_estimate": float  # Optional
+}
+```
+
+**Key Properties:**
+
+1. **Plan is instruction set, not results** - Contains what to do, not execution artifacts
+2. **References not payloads** - Points to MemoryGate/AsyncGate, doesn't embed content
+3. **Step types are explicit** - call_worker vs queue_execution vs wait_for vs aggregate vs escalate
+4. **Executor specified** - Aggregate steps say who should do synthesis (principal vs self)
+5. **Assumptions explicit** - Plan states its assumptions for validation
+
+**Plan Validation:**
+
+DeleGates must produce valid Plans. Schema validation ensures:
+- All step types are recognized
+- Worker references exist in registry
+- Dependencies are acyclic
+- References point to valid MemoryGate/AsyncGate entities
+- Confidence scores are 0.0-1.0
+
+If DeleGate output doesn't validate as Plan → reject, retry, or escalate.
+
+**DeleGates Have No Interface for Execution:**
+
+DeleGates cannot:
+- Execute worker tools directly (produces Plans with call_worker steps)
+- Store results (produces Plans with references to expected AsyncGate pointers)
+- Aggregate results (produces Plans with aggregate steps for Principal)
+- Access payloads (only references to pointers)
+
+This makes the system safe, predictable, and composable.
+
+### ResultEnvelope
+
+```python
+{
+    "plan_id": "string",
+    "step_id": "string",
+    "worker_id": "string",
+    "tool_name": "string",
+    "status": "complete|failed|async_queued|in_progress",
+    
+    # For direct execution
+    "payload": dict | null,
+    
+    # For async execution
+    "async_task_id": "string | null",
+    "result_pointer": "string | null",  # Filled when async completes
+    
+    # Provenance
+    "provenance": {
+        "started_at": "timestamp",
+        "completed_at": "timestamp | null",
+        "duration_seconds": float,
+        "run_id": "string (if applicable)"
+    },
+    
+    # Error handling
+    "error": {
+        "message": "string",
+        "retryable": bool
+    } | null
+}
+```
+
+---
+
+## Fractal Delegation: DeleGate-to-DeleGate Communication
+
+### The Essential Invariant
+
+**DeleGates only communicate with each other via the same public contract they use with any principal.**
+
+A parent DeleGate sees a child DeleGate as a worker that exposes delegation tools. No special casing. No bespoke protocols.
+
+### How It Works
+
+**1. Child DeleGate Registers as Worker:**
+
+```python
+# Research Department DeleGate registers with General Manager DeleGate
+manifest = {
+    "worker_id": "research-dept-delegate",
+    "endpoint": "https://research-delegate.example.com/mcp",
+    "tools": [
+        {
+            "name": "create_delegation_plan",
+            "input_schema": {...},  # Same schema as any DeleGate
+            "output_schema": {...}
+        },
+        {
+            "name": "execute_delegation_plan",
+            "input_schema": {...},
+            "output_schema": {...}
+        }
+    ],
+    "capabilities": ["research", "data_analysis", "literature_review"],
+    "constraints": {...},
+    "hints": {
+        "latency_band": "medium",
+        "expected_runtime": "long"  # Research takes time
+    },
+    "trust": {
+        "tier": "trusted",  # First-party DeleGate
+        "signature": "..."
+    }
+}
+
+# Child DeleGate POST to parent DeleGate
+POST https://general-manager-delegate.example.com/workers/register
+```
+
+**2. Parent DeleGate Routes Intent Downstream:**
+
+```python
+# Principal asks General Manager DeleGate
+intent = "Conduct literature review on recursive compression theory"
+
+# General Manager creates plan
+plan = {
+    "steps": [
+        {
+            "step_id": "step-1",
+            "worker_id": "research-dept-delegate",  # Child DeleGate
+            "tool_name": "create_delegation_plan",
+            "params": {
+                "intent": "Literature review on recursive compression theory",
+                "context": {"domain": "cognitive_science"}
+            },
+            "mode": "direct"  # Creating plan is fast
+        },
+        {
+            "step_id": "step-2",
+            "worker_id": "research-dept-delegate",
+            "tool_name": "execute_delegation_plan",
+            "params": {
+                "plan_id": "{{step-1.plan_id}}"
+            },
+            "mode": "async"  # Execution is long
+        }
+    ]
+}
+```
+
+**3. Child DeleGate Executes, Reports Upstream:**
+
+```python
+# Research DeleGate creates its own sub-plan
+sub_plan = {
+    "steps": [
+        {
+            "worker_id": "arxiv-scanner-worker",
+            "tool_name": "search_papers",
+            "params": {"query": "recursive compression", "max_results": 50}
+        },
+        {
+            "worker_id": "citation-analyzer-worker",
+            "tool_name": "extract_citations",
+            "depends_on": ["step-1"]
+        },
+        {
+            "worker_id": "summary-generator-worker",
+            "tool_name": "synthesize_findings",
+            "depends_on": ["step-2"]
+        }
+    ]
+}
+
+# Research DeleGate executes sub-plan
+# Uses AsyncGate for long steps (same as any DeleGate)
+# Returns standard ResultEnvelope to parent
+
+result = {
+    "status": "complete",
+    "payload": {
+        "papers_found": 47,
+        "key_findings": [...],
+        "result_pointer": "s3://bucket/lit-review-xyz.json"
+    }
+}
+```
+
+**4. Parent Aggregates and Reports to Principal:**
+
+```python
+# General Manager receives results from Research Dept
+# Aggregates with any other parallel steps
+# Returns standard report to Principal
+
+{
+    "plan_id": "plan-abc",
+    "status": "complete",
+    "summary": "Literature review complete: 47 papers analyzed, key findings extracted",
+    "results": [
+        {
+            "step_id": "step-2",
+            "worker_id": "research-dept-delegate",
+            "result_pointer": "s3://bucket/lit-review-xyz.json"
+        }
+    ]
+}
+```
+
+### Hierarchy Example
+
+```
+Principal AI: "Build a comprehensive AI safety analysis"
+    ↓
+DeleGate (General Manager)
+    ├──→ DeleGate (Research Dept): "Literature review on AI safety"
+    │       ├──→ Worker: arxiv-scanner
+    │       ├──→ Worker: citation-analyzer
+    │       └──→ Worker: summary-generator
+    │
+    ├──→ DeleGate (Code Dept): "Analyze safety-critical codebases"
+    │       ├──→ Worker: code-scanner
+    │       ├──→ Worker: vulnerability-detector
+    │       └──→ Worker: safety-verifier
+    │
+    └──→ DeleGate (Data Dept): "Analyze incident reports"
+            ├──→ Worker: data-collector
+            ├──→ Worker: incident-classifier
+            └──→ Worker: trend-analyzer
+```
+
+Each DeleGate:
+- Manages its own worker pool
+- Creates plans using its domain expertise
+- Uses AsyncGate for long work (global)
+- Reports via standard ResultEnvelope
+- Writes operational trace to MemoryGate
+- Promotes knowledge only if authorized
+
+### Swappability
+
+Because DeleGates use standard MCP contract:
+
+```python
+# Swap Research Dept DeleGate
+# Old: research-dept-delegate-v1
+# New: research-dept-delegate-v2
+
+# Just update worker registry
+unregister_worker("research-dept-delegate-v1")
+register_worker("research-dept-delegate-v2")
+
+# General Manager DeleGate continues working
+# No code changes, no special migration
+# Just capability transfer
+```
+
+### Domain Isolation
+
+Each DeleGate maintains its own worker pool:
+
+```python
+# Research Dept DeleGate only sees research workers
+research_workers = [
+    "arxiv-scanner",
+    "citation-analyzer",
+    "summary-generator"
+]
+
+# Code Dept DeleGate only sees code workers
+code_workers = [
+    "code-scanner",
+    "vulnerability-detector",
+    "safety-verifier"
+]
+
+# General Manager sees department DeleGates (not their workers)
+general_workers = [
+    "research-dept-delegate",
+    "code-dept-delegate",
+    "data-dept-delegate"
+]
+```
+
+**Benefit:** Scale departments independently, domain expertise encapsulated.
+
+### Cross-Department Collaboration
+
+If Research needs Code's help:
+
+```python
+# Research DeleGate escalates to parent
+result = {
+    "status": "needs_escalation",
+    "message": "Need code analysis for paper implementations",
+    "escalation": {
+        "intent": "Analyze code implementations from papers",
+        "suggested_delegate": "code-dept-delegate"
+    }
+}
+
+# Parent routes to Code Dept
+# Or Research could call Code directly if authorized
+```
+
+**Policy controls cross-department calls.**
+
+---
+
+## Integration with AsyncGate
+
+**AsyncGate is global** (or per-org). Every DeleGate at any tier uses the same AsyncGate instance.
+
+**Critical Rule:** AsyncGate is the pointer truth. DeleGates don't invent their own async mechanisms.
+
+### Flow (Same at Any Tier)
+
+**Rule:** If a tool's manifest says "long-running" (or expected_runtime > threshold), DeleGate does not wait.
+
+```
+DeleGate receives plan with async step
+    ↓
+DeleGate calls asyncgate.queue_task()
+    ↓
+AsyncGate queues work, returns task_id
+    ↓
+DeleGate records task_id in ResultEnvelope
+    ↓
+DeleGate returns plan to principal (status: async_queued)
+    ↓
+Principal continues other work
+    ↓
+[Worker completes task, AsyncGate posts receipt to MemoryGate]
+    ↓
+Principal sees receipt in next bootstrap
+    ↓
+Principal calls asyncgate.fetch_task_result(task_id)
+    ↓
+Principal optionally stores result in MemoryGate permanent memory
+```
+
+**DeleGate can fetch results later:**
+
+```python
+# DeleGate polls AsyncGate for async step results
+status = await asyncgate.check_task_status(async_task_id)
+
+if status.complete:
+    result = await asyncgate.fetch_task_result(async_task_id)
+    
+    # Update ResultEnvelope
+    result_envelope.status = "complete"
+    result_envelope.result_pointer = result.result_pointer
+    result_envelope.payload = result.content  # Or just pointer
+```
+
+**Or let principal AI do it** (preferred - inbox pulls them back when ready).
+
+### Nested DeleGates All Use AsyncGate
+
+Example showing three-tier delegation with shared AsyncGate:
+
+```
+Principal AI: "Build comprehensive AI safety analysis"
+    ↓
+DeleGate (General Manager): Creates plan
+    ├─→ Step 1: research-dept-delegate.execute_delegation_plan()
+    │     └─→ Research DeleGate: Creates sub-plan
+    │           ├─→ arxiv-scanner (direct, fast)
+    │           ├─→ citation-analyzer (async → AsyncGate)
+    │           └─→ summary-generator (async → AsyncGate)
+    │
+    ├─→ Step 2: code-dept-delegate.execute_delegation_plan()  
+    │     └─→ Code DeleGate: Creates sub-plan
+    │           ├─→ code-scanner (async → AsyncGate)
+    │           └─→ vulnerability-detector (async → AsyncGate)
+    │
+    └─→ Step 3: synthesis-worker.synthesize_findings()
+          (depends on steps 1 & 2)
+
+All async work flows through single AsyncGate:
+├─ Task abc-1: citation-analyzer (recipient: research-dept-delegate)
+├─ Task abc-2: summary-generator (recipient: research-dept-delegate)  
+├─ Task abc-3: code-scanner (recipient: code-dept-delegate)
+└─ Task abc-4: vulnerability-detector (recipient: code-dept-delegate)
+
+When tasks complete:
+├─ AsyncGate posts receipt to MemoryGate → research-dept-delegate inbox
+├─ AsyncGate posts receipt to MemoryGate → code-dept-delegate inbox
+│
+├─ Research DeleGate fetches results, aggregates, reports to General Manager
+└─ Code DeleGate fetches results, aggregates, reports to General Manager
+    │
+    └─→ General Manager aggregates both, reports to Principal AI
+```
+
+**Key Properties:**
+
+1. **Same Rope, Any Tier:** Every DeleGate uses AsyncGate the same way
+2. **Pointer Authority:** AsyncGate remains single source of truth for result locations
+3. **Inbox Per DeleGate:** Each DeleGate (and Principal) has own MemoryGate inbox
+4. **Hierarchical Aggregation:** Each tier aggregates and escalates upward
+5. **No Special Cases:** Child DeleGates don't know they're nested
+
+---
+
+## Integration with MemoryGate
+
+### Reporting Boundaries (Critical)
+
+DeleGate can write to MemoryGate, but categories must stay distinct:
+
+**1. Operational Trace (Always Allowed)**
+
+DeleGate writes lightweight audit entries to MemoryGate:
+
+```python
+# After plan completes
+memory_store(
+    observation="Delegated 'analyze codebase' → code-analyzer (step-1, async) → optimization-suggester (step-2, direct). Completed in 420s.",
+    domain="delegation_trace",
+    confidence=1.0,
+    evidence=[f"plan:{plan_id}", f"exec:{execution_id}"],
+    metadata={
+        "plan_id": plan_id,
+        "intent": original_intent,
+        "workers_used": [worker_ids],
+        "steps_count": len(steps),
+        "total_duration_seconds": duration,
+        "success_rate": successful_steps / total_steps,
+        "result_pointers": [step.result_pointer for step in async_steps]
+    }
+)
+```
+
+This creates:
+- Audit trail for debugging
+- Pattern extraction material ("this decomposition works for this intent")
+- Delegation history for optimization
+
+**2. Knowledge Promotion (Intentional Only)**
+
+DeleGate does NOT dump raw worker outputs into MemoryGate.
+
+Instead, DeleGate reports to principal:
+- Summary of work done
+- Pointers to results (AsyncGate pointers)
+- Recommended promotion candidates
+
+```python
+# Plan completion report to principal
+{
+    "plan_id": "plan-abc",
+    "status": "complete",
+    "summary": "Analyzed codebase (15,000 lines), found 23 issues, generated 12 optimization suggestions",
+    "results": [
+        {
+            "step_id": "step-2",
+            "worker_id": "optimization-suggester",
+            "status": "complete",
+            "result_pointer": "s3://bucket/optimizations-xyz.json",
+            "promotion_recommendation": {
+                "promote": true,
+                "domain": "code_optimization_patterns",
+                "reasoning": "Novel optimization pattern detected: recursive memoization"
+            }
+        }
+    ]
+}
+```
+
+Then either:
+- **Principal AI promotes meaning** (default, preferred)
+- **DeleGate is explicitly authorized** to promote within its domain (policy-based)
+
+**Policy Example:**
+
+```python
+# DeleGate with domain promotion authority
+delegate_config = {
+    "delegate_id": "code-dept-delegate",
+    "auto_promote": True,
+    "promotion_policy": {
+        "domains": ["code_patterns", "optimization_techniques"],
+        "confidence_threshold": 0.8,
+        "requires_novel": True  # Only promote if pattern is new
+    }
+}
+
+# If authorized, DeleGate can promote directly
+if delegate.has_promotion_authority(domain):
+    memory_store(
+        observation=synthesized_insight,
+        domain=domain,
+        confidence=confidence
+    )
+```
+
+**This Keeps MemoryGate Clean:**
+- No raw worker output spam
+- Only synthesized insights
+- Principal maintains control over knowledge
+- Domain DeleGates can auto-promote within scope
+
+### DeleGate Persistent State
+
+DeleGate stores system knowledge in MemoryGate:
+
+```python
+# Worker manifests as concepts
+memory_store_concept(
+    name=worker_id,
+    concept_type="worker",
+    description=worker.description,
+    metadata={
+        "endpoint": worker.endpoint,
+        "tools": worker.tools,
+        "capabilities": worker.capabilities,
+        "trust_tier": worker.trust.tier,
+        "registered_at": worker.registered_at,
+        "managed_by_delegate": delegate_id  # Which DeleGate manages this worker
+    }
+)
+
+# DeleGate-to-DeleGate relationships
+memory_add_concept_relationship(
+    from_concept=parent_delegate_id,
+    to_concept=child_delegate_id,
+    rel_type="manages",
+    description=f"{parent_delegate_id} delegates to {child_delegate_id} for {domain}"
+)
+
+# Tool relationships
+memory_add_concept_relationship(
+    from_concept=worker_id,
+    to_concept=capability,
+    rel_type="provides",
+    description=f"{worker_id} provides {capability}"
+)
+```
+
+**Benefits:**
+
+- DeleGate hierarchy visible in MemoryGate knowledge graph
+- Worker discovery history preserved
+- Tool evolution tracked over time
+- Cross-worker capability analysis enabled
+- Any DeleGate can rebuild registry from MemoryGate after restart
+
+### Bootstrap Integration
+
+```python
+# DeleGate session start
+delegate_state = memory_bootstrap("code-dept-delegate", "Claude")
+
+# Reload worker registry for this domain
+workers = memory_recall(
+    domain="worker_registry",
+    filters={"managed_by_delegate": "code-dept-delegate"}
+)
+
+for worker_data in workers:
+    register_worker_from_memory(worker_data)
+```
+
+**Inbox Stays Signal-Only:**
+
+DeleGate does NOT spam MemoryGate inbox with:
+- "Plan created"
+- "Step started"  
+- "Worker called"
+- Progress updates
+
+Inbox only receives:
+- AsyncGate task complete/failed (via AsyncGate receipts)
+- Critical escalations (optional, policy-based)
+
+**Same rope, any tier.** Every DeleGate uses AsyncGate for long work, receives completion via MemoryGate inbox receipts.
+
+---
+
+## MCP Implementation
+
+DeleGate exposes MCP tools for principal AI agents:
+
+### Planning Tools
+
+```python
+@mcp.tool()
+def create_delegation_plan(
+    intent: str,
+    context: dict = None,
+    constraints: dict = None
+):
+    """
+    Create a delegation plan for high-level intent.
+    
+    Args:
+        intent: Natural language description of desired outcome
+        context: Additional context (language, priority, domain)
+        constraints: Hard constraints (timeout, budget, workers to exclude)
+    
+    Returns:
+        plan_id: Reference to created plan
+        steps: List of planned steps with workers/tools
+        estimated_runtime_seconds: Expected total duration
+        can_execute_now: bool (all workers available)
+    """
+
+@mcp.tool()
+def execute_delegation_plan(
+    plan_id: str,
+    mode: str = "auto"  # auto/direct_only/async_only
+):
+    """
+    Execute a delegation plan.
+    
+    Args:
+        plan_id: Plan to execute
+        mode: Execution strategy
+            - auto: Direct for fast, async for long (default)
+            - direct_only: Only execute direct steps, queue async
+            - async_only: Queue all steps via AsyncGate
+    
+    Returns:
+        execution_id: Reference to this execution
+        direct_results: Results from direct (fast) steps
+        async_tasks: Task IDs for async steps
+        status: complete/partial/queued
+    """
+
+@mcp.tool()
+def get_plan_status(plan_id: str):
+    """
+    Check status of an executing plan.
+    
+    Returns:
+        plan_id: Plan reference
+        status: queued/executing/complete/failed/partial
+        steps_complete: Number of finished steps
+        steps_total: Total steps
+        results: Available results so far
+    """
+```
+
+### Worker Discovery Tools
+
+```python
+@mcp.tool()
+def list_workers(
+    capability: str = None,
+    trust_tier: str = None,
+    available_only: bool = True
+):
+    """
+    List registered workers.
+    
+    Args:
+        capability: Filter by capability tag
+        trust_tier: Filter by trust level
+        available_only: Only show healthy workers
+    
+    Returns:
+        workers: [{worker_id, capabilities, tools, hints, status}]
+    """
+
+@mcp.tool()
+def get_worker_manifest(worker_id: str):
+    """
+    Get full manifest for a specific worker.
+    
+    Returns complete tool schemas, constraints, hints.
+    """
+
+@mcp.tool()
+def search_capabilities(query: str):
+    """
+    Fuzzy search for workers by capability.
+    
+    Args:
+        query: Natural language capability description
+    
+    Returns:
+        matches: [{worker_id, tool_name, relevance_score, description}]
+    """
+```
+
+### Direct Worker Invocation
+
+```python
+@mcp.tool()
+def call_worker_tool(
+    worker_id: str,
+    tool_name: str,
+    params: dict,
+    mode: str = "auto"  # auto/direct/async
+):
+    """
+    Directly invoke a worker tool (bypasses planning).
+    
+    Args:
+        worker_id: Which worker to call
+        tool_name: Which tool to invoke
+        params: Tool parameters (validated against schema)
+        mode: Execution mode
+            - auto: Direct if fast, async if long (default)
+            - direct: Force synchronous execution
+            - async: Force async via AsyncGate
+    
+    Returns:
+        If direct: {status: "complete", result: {...}}
+        If async: {status: "queued", task_id: "...", poll_suggestion_seconds: N}
+    """
+```
+
+---
+
+## Example Workflow
+
+### Simple Direct Execution
+
+```python
+# Principal AI (Kee)
+plan = create_delegation_plan(
+    intent="Analyze sentiment of this text: 'AsyncGate is amazing!'",
+    context={"language": "english"}
+)
+
+# DeleGate finds sentiment-analysis worker
+# Plan has 1 step (direct, fast)
+{
+    "plan_id": "plan-abc",
+    "steps": [
+        {
+            "step_id": "step-1",
+            "worker_id": "sentiment-analyzer-001",
+            "tool_name": "analyze_sentiment",
+            "mode": "direct"  # Fast execution
+        }
+    ],
+    "estimated_runtime_seconds": 2
+}
+
+# Execute immediately
+result = execute_delegation_plan("plan-abc")
+
+# Returns direct result
+{
+    "execution_id": "exec-xyz",
+    "status": "complete",
+    "direct_results": [
+        {
+            "step_id": "step-1",
+            "sentiment": "positive",
+            "confidence": 0.95
+        }
+    ]
+}
+```
+
+### Complex Multi-Step with Async
+
+```python
+# Principal AI (Kee)
+plan = create_delegation_plan(
+    intent="Index all PDFs in F:/Documents, extract key concepts, and generate summary",
+    context={"file_types": ["pdf"], "path": "F:/Documents"}
+)
+
+# DeleGate creates multi-step plan
+{
+    "plan_id": "plan-def",
+    "steps": [
+        {
+            "step_id": "step-1",
+            "worker_id": "file-scanner-001",
+            "tool_name": "scan_directory",
+            "mode": "direct"  # Fast - just list files
+        },
+        {
+            "step_id": "step-2",
+            "worker_id": "pdf-indexer-002",
+            "tool_name": "index_pdfs",
+            "mode": "async",  # Long - process all PDFs
+            "depends_on": ["step-1"]
+        },
+        {
+            "step_id": "step-3",
+            "worker_id": "concept-extractor-003",
+            "tool_name": "extract_concepts",
+            "mode": "async",  # Long - NLP processing
+            "depends_on": ["step-2"]
+        }
+    ],
+    "estimated_runtime_seconds": 3600  # ~1 hour
+}
+
+# Execute
+result = execute_delegation_plan("plan-def")
+
+# Step 1 completes immediately, steps 2-3 queued
+{
+    "execution_id": "exec-ghi",
+    "status": "partial",
+    "direct_results": [
+        {
+            "step_id": "step-1",
+            "files_found": 247
+        }
+    ],
+    "async_tasks": [
+        {"step_id": "step-2", "task_id": "task-jkl"},
+        {"step_id": "step-3", "task_id": "task-mno"}
+    ]
+}
+
+# Principal continues other work...
+
+# Later session - MemoryGate inbox shows:
+# "PDF indexing complete (247 files)"
+# "Concept extraction complete (1,247 concepts)"
+
+# Fetch results
+pdf_results = asyncgate.fetch_task_result("task-jkl")
+concept_results = asyncgate.fetch_task_result("task-mno")
+
+# Store in MemoryGate permanent memory
+memory_store(observation=..., domain="document_analysis")
+```
+
+---
+
+## Worker Implementation Example
+
+A worker is just an MCP server that registers with DeleGate:
+
+```python
+# sentiment-analyzer-worker.py
+from mcp import MCPServer
+import httpx
+
+mcp = MCPServer("sentiment-analyzer")
+
+@mcp.tool()
+def analyze_sentiment(text: str, language: str = "english"):
+    """
+    Analyze sentiment of text.
+    
+    Args:
+        text: Text to analyze
+        language: Language code
+    
+    Returns:
+        sentiment: positive/negative/neutral
+        confidence: 0.0-1.0
+        keywords: [str]
+    """
+    # Actual sentiment analysis logic
+    result = run_sentiment_model(text, language)
+    return result
+
+# Register with DeleGate on startup
+async def register_with_delegate():
+    manifest = {
+        "worker_id": "sentiment-analyzer-001",
+        "endpoint": "https://sentiment-worker.example.com/mcp",
+        "tools": mcp.get_tool_schemas(),  # Auto-generated from @mcp.tool()
+        "capabilities": ["sentiment_analysis", "nlp", "text_processing"],
+        "constraints": {
+            "max_payload_bytes": 1048576,  # 1MB
+            "timeout_seconds": 30,
+            "rate_limit_per_hour": 1000
+        },
+        "hints": {
+            "latency_band": "fast",
+            "cost_band": "low",
+            "expected_runtime": "fast"  # <5 seconds
+        },
+        "trust": {
+            "tier": "verified",
+            "signature": sign_manifest(manifest),
+            "key_id": "sentiment-worker-key-001"
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "https://delegate.memorygate.ai/workers/register",
+            json=manifest
+        )
+
+if __name__ == "__main__":
+    await register_with_delegate()
+    mcp.run()
+```
+
+**Workers are completely autonomous.** They register themselves, DeleGate discovers their capabilities dynamically.
+
+---
+
+## Deployment Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Principal AI (Claude, ChatGPT, etc.)               │
+│  Uses DeleGate MCP tools to delegate work           │
+└──────────────────┬──────────────────────────────────┘
+                   │ MCP
+                   ▼
+         ┌─────────────────┐
+         │   DeleGate      │
+         │   (FastAPI +    │
+         │    FastMCP)     │
+         │                 │
+         │ - Worker Reg    │
+         │ - Plan Builder  │
+         │ - Router        │
+         └─┬───────┬───────┘
+           │       │
+           │       │ HTTP (for long work)
+           │       ▼
+           │  ┌──────────────┐
+           │  │  AsyncGate   │
+           │  └──────────────┘
+           │
+           │ MCP (for direct work)
+           ▼
+    ┌──────────────┐
+    │   Workers    │
+    │  (MCP Servers│
+    │   everywhere)│
+    └──────────────┘
+    
+    - sentiment-analyzer (Europe)
+    - code-analyzer (US)
+    - pdf-indexer (Asia)
+    - image-processor (local)
+    - etc.
+```
+
+**DeleGate as Coordination Point:**
+- Single service
+- Lightweight (can run on smaller model)
+- Stateless execution (state in MemoryGate)
+- Horizontally scalable
+
+**Workers:**
+- Distributed globally
+- Self-describing
+- Autonomous registration
+- Can be added/removed dynamically
+
+---
+
+## Security & Trust
+
+### Trust Tiers
+
+```python
+TRUST_TIERS = {
+    "trusted": {
+        "description": "First-party workers, full permissions",
+        "side_effects_allowed": ["read", "write", "network", "exec"],
+        "rate_limit_multiplier": 1.0
+    },
+    "verified": {
+        "description": "Third-party workers, verified signature",
+        "side_effects_allowed": ["read", "network"],
+        "rate_limit_multiplier": 0.5
+    },
+    "sandbox": {
+        "description": "Unverified workers, isolated execution",
+        "side_effects_allowed": ["read"],
+        "rate_limit_multiplier": 0.1
+    },
+    "untrusted": {
+        "description": "Experimental workers, heavy restrictions",
+        "side_effects_allowed": [],
+        "rate_limit_multiplier": 0.01
+    }
+}
+```
+
+### Worker Signatures
+
+```python
+# Worker signs its manifest
+signature = sign(
+    data=manifest,
+    private_key=worker_private_key
+)
+
+# DeleGate verifies on registration
+verify_signature(
+    data=manifest,
+    signature=signature,
+    public_key=get_worker_public_key(worker_id)
+)
+```
+
+### Capability-Based Security
+
+DeleGate tracks what each worker can do:
+
+```python
+manifest = {
+    "side_effects": {
+        "filesystem": "read",       # read/write/none
+        "network": "outbound",      # outbound/bidirectional/none
+        "execution": "none"         # subprocess/container/none
+    }
+}
+
+# DeleGate enforces constraints before routing
+if plan.requires_filesystem_write and worker.side_effects.filesystem != "write":
+    raise PermissionDenied("Worker cannot write to filesystem")
+```
+
+---
+
+## Cost Tracking & Budgets
+
+```python
+# Track costs per worker call
+@mcp.tool()
+def execute_delegation_plan(
+    plan_id: str,
+    budget: dict = None  # Optional cost constraints
+):
+    """
+    Args:
+        budget: {
+            "max_total_cost": 1.00,      # USD
+            "max_cost_per_step": 0.25,
+            "currency": "USD"
+        }
+    """
+    
+    total_cost = 0
+    for step in plan.steps:
+        worker = get_worker(step.worker_id)
+        estimated_cost = worker.hints.get("cost_estimate", 0)
+        
+        if budget and total_cost + estimated_cost > budget.max_total_cost:
+            return {
+                "status": "budget_exceeded",
+                "completed_steps": completed,
+                "total_cost": total_cost
+            }
+        
+        # Execute step...
+        total_cost += estimated_cost
+```
+
+---
+
+## Pattern Extraction
+
+DeleGate can learn from delegation history:
+
+```python
+# After many delegations for "analyze codebase"
+pattern = memory_update_pattern(
+    category="delegation_patterns",
+    pattern_name="codebase_analysis",
+    pattern_text="""
+    When analyzing codebases:
+    1. Start with file-scanner (fast, direct)
+    2. Route to language-specific analyzer (async, long)
+    3. Finish with concept-extractor (async, medium)
+    4. Total runtime typically 20-40 minutes
+    5. Prefer workers with 'code_analysis' capability
+    6. S3 storage recommended for large repos
+    """,
+    confidence=0.95,
+    evidence_observation_ids=[obs1, obs2, obs3]
+)
+```
+
+DeleGate can use patterns to improve future planning.
+
+---
+
+## Comparison to Alternatives
+
+**DeleGate vs LangChain/CrewAI:**
+- DeleGate: Dynamic worker discovery, self-describing workers, pointer-based results
+- LangChain: Hardcoded agents, callback chains, mixed concerns
+- CrewAI: Predefined roles, synchronous execution, monolithic
+
+**DeleGate vs Temporal/Airflow:**
+- DeleGate: AI-native, MCP workers, lightweight plans
+- Temporal: Code-centric workflows, heavyweight orchestration
+- Airflow: DAG-based, cron-focused, not AI-aware
+
+**DeleGate's Unique Position:**
+- Self-documenting workers (MCP introspection)
+- Pointer registry integration (AsyncGate)
+- Memory integration (MemoryGate)
+- Trust tiers and capability security
+- AI-first design (small model can run DeleGate)
+
+---
+
+## Open Questions
+
+1. **Plan Optimization:** Should DeleGate reorder steps for parallelization automatically, or require explicit dependency graph?
+
+2. **Worker Selection:** When multiple workers provide same capability, how to choose? (Cost, latency, trust, locality, load balancing?)
+
+3. **Failure Handling:** Should DeleGate auto-retry failed steps, or surface to principal immediately?
+
+4. **Plan Caching:** Should similar intents reuse previous plans, or always regenerate?
+
+5. **Worker Versioning:** How to handle worker tool schema changes? Semantic versioning in manifests?
+
+6. **Multi-Tenancy:** How to isolate workers/plans for different principal AIs? Per-AI worker registries?
+
+---
+
+*Concept documented: 2026-01-03*  
+*Purpose: Decision and routing layer for self-documenting worker orchestration*  
+*Completes the trilogy: MemoryGate (memory) + AsyncGate (work) + DeleGate (delegation)*
+
+
+---
+
+## Receipt Emission Requirements (Added 2026-01-04)
+
+**See `receipt_protocol.md` for complete receipt specification.**
+
+DeleGate emits receipts to MemoryGate when plans are created. This enables complete audit trails showing how work was decomposed and routed.
+
+### Receipt Emission Event: Plan Created
+
+When DeleGate generates a plan, it immediately emits a receipt:
+
+```python
+# After plan generated and validated
+receipt_id = f"R.{timestamp}.delegate.{plan_id}"
+
+await post_receipt_to_memorygate({
+    "receipt_id": receipt_id,
+    "event_type": "plan_created",
+    "recipient_ai": plan.principal_ai,  # Principal who requested plan
+    "source_system": "delegate",
+    "summary": f"Plan created for: {plan.intent[:100]}",
+    "artifact_pointer": plan.plan_id,
+    "artifact_location": "delegate_registry",
+    "requires_action": True,
+    "suggested_next_step": "Execute plan steps (call workers, queue tasks)",
+    "caused_by_receipt_id": request.caused_by_receipt_id,  # Chain from originating request
+    "dedupe_key": f"delegate:plan_created:{plan.plan_id}:v1",
+    "metadata": {
+        "plan_id": plan.plan_id,
+        "delegate_id": delegate_id,
+        "scope": plan.scope,
+        "confidence": plan.confidence,
+        "step_count": len(plan.steps),
+        "estimated_total_runtime_seconds": plan.estimated_total_runtime_seconds,
+        "can_run_parallel": plan.can_run_parallel
+    }
+})
+```
+
+### Receipt Chaining Through Plan Steps
+
+When Principal executes plan steps that queue AsyncGate tasks, the receipt chain continues:
+
+```python
+# Principal executing plan step: queue_execution
+for step in plan.steps:
+    if step.step_type == "queue_execution":
+        # Queue task with receipt chaining
+        result = asyncgate.queue_task(
+            task_type=f"mcp_worker_{step.worker_id}",
+            params=step.params,
+            recipient_ai=principal_ai,
+            caused_by_receipt_id=plan.receipt_id  # Chain from plan receipt
+        )
+        
+        # AsyncGate emits task_queued receipt that chains from plan_created receipt
+```
+
+This creates a complete chain:
+```
+task_received (user input)
+  ↓ caused_by
+plan_created (DeleGate decomposition)
+  ↓ caused_by
+task_queued (AsyncGate execution)
+  ↓ pairs_with
+task_complete (AsyncGate result)
+```
+
+### Plan Creation with Receipt Emission
+
+Updated create_delegation_plan() with receipt support:
+
+```python
+@mcp.tool()
+async def create_delegation_plan(
+    intent: str,
+    principal_ai: str,
+    context: dict = None,
+    caused_by_receipt_id: str = None  # NEW: for receipt chaining
+) -> dict:
+    """
+    Generate structured plan from intent.
+    
+    Args:
+        intent: High-level goal or task description
+        principal_ai: AI that will execute the plan
+        context: Optional context (priority, memory_refs, constraints)
+        caused_by_receipt_id: Receipt that caused this plan request (for chaining)
+    
+    Returns:
+        plan: Structured plan with steps
+        receipt_id: Receipt proving plan was created
+    """
+    # Generate plan (existing logic)
+    plan = await generate_plan(
+        intent=intent,
+        principal_ai=principal_ai,
+        context=context
+    )
+    
+    # Store plan in delegate registry
+    await db.store_plan(plan)
+    
+    # Emit receipt IMMEDIATELY (before any failure points)
+    receipt_uuid = await post_receipt_to_memorygate({
+        "receipt_id": f"R.{timestamp()}.delegate.{plan.plan_id}",
+        "event_type": "plan_created",
+        "recipient_ai": principal_ai,
+        "source_system": f"delegate_{delegate_id}",
+        "summary": f"Plan: {intent[:100]}",
+        "artifact_pointer": plan.plan_id,
+        "artifact_location": "delegate_registry",
+        "requires_action": True,
+        "suggested_next_step": "Execute plan steps",
+        "caused_by_receipt_id": caused_by_receipt_id,
+        "dedupe_key": f"delegate:plan_created:{plan.plan_id}:v1",
+        "metadata": {
+            "plan_id": plan.plan_id,
+            "delegate_id": delegate_id,
+            "step_count": len(plan.steps),
+            "estimated_runtime": plan.estimated_total_runtime_seconds
+        }
+    })
+    
+    return {
+        "plan": plan,
+        "receipt_id": f"R.{timestamp()}.delegate.{plan.plan_id}",
+        "receipt_uuid": receipt_uuid
+    }
+```
+
+### Receipt Posting Implementation
+
+```python
+# delegate/integrations/memorygate.py
+import httpx
+import os
+
+MEMORYGATE_URL = os.getenv("MEMORYGATE_URL")
+SERVICE_TOKEN = os.getenv("MEMORYGATE_SERVICE_TOKEN")
+
+async def post_receipt_to_memorygate(receipt: dict) -> str:
+    """
+    Post receipt to MemoryGate receipt store.
+    
+    Args:
+        receipt: Receipt dictionary conforming to receipt_protocol.md schema
+    
+    Returns:
+        Receipt UUID from MemoryGate
+        
+    Raises:
+        HTTPException if MemoryGate unavailable or rejects receipt
+    """
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.post(
+                f"{MEMORYGATE_URL}/internal/receipt",
+                json=receipt,
+                headers={"X-Service-Token": SERVICE_TOKEN}
+            )
+            
+            if response.status_code == 409:
+                # Duplicate - already sent, idempotent success
+                logger.info(f"Receipt already exists: {receipt['receipt_id']}")
+                return response.json()["existing_uuid"]
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info(f"Receipt posted: {receipt['receipt_id']} → {result['uuid']}")
+            return result["uuid"]
+            
+        except httpx.TimeoutException:
+            # Queue locally for retry
+            logger.error(f"MemoryGate timeout posting receipt: {receipt['receipt_id']}")
+            await queue_receipt_for_retry(receipt)
+            raise HTTPException(503, "MemoryGate unavailable")
+            
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to post receipt: {e}")
+            raise
+```
+
+### Plan Step Types and Receipt Emission
+
+Only plan_created emits receipt from DeleGate. Plan steps do not emit receipts directly - they are instructions for Principal to execute:
+
+**Plan Step Types:**
+
+1. **queue_execution** → Principal queues in AsyncGate → AsyncGate emits task_queued receipt
+2. **call_worker** → Principal calls worker directly → May or may not emit receipt (depends on fast vs async)
+3. **wait_for** → Principal waits for receipts in MemoryGate inbox → No receipt (internal state)
+4. **aggregate** → Principal performs synthesis → No receipt (internal cognitive work)
+5. **escalate** → Principal may emit escalation receipt to higher tier (if in hierarchy)
+
+**Only boundary crossings emit receipts. Internal planning work does not.**
+
+### Receipt Flow Through Delegation Hierarchy
+
+Multi-tier delegation creates nested receipt chains:
+
+```
+Principal AI → General Manager DeleGate
+  Receipt: plan_created (GM level)
+  caused_by: task_received (user input)
+    ↓
+General Manager DeleGate → Research Dept DeleGate
+  Receipt: plan_created (research dept level)
+  caused_by: plan_created (GM level)
+    ↓
+Research Dept DeleGate → Plan includes worker calls
+  Principal executes plan → AsyncGate.queue_task()
+    Receipt: task_queued (research worker)
+    caused_by: plan_created (research dept level)
+      ↓
+Worker completes → AsyncGate
+  Receipt: task_complete
+  pairs_with: task_queued
+```
+
+Complete chain: user_input ← GM_plan ← dept_plan ← task_queued ← task_complete
+
+### Receipt Retry Queue
+
+If MemoryGate is temporarily unavailable, DeleGate queues receipts for retry:
+
+```python
+# Receipt retry queue (Redis or database)
+async def queue_receipt_for_retry(receipt: dict):
+    """Queue receipt for retry if MemoryGate unavailable."""
+    await redis.lpush("receipt_retry_queue", json.dumps(receipt))
+
+# Background worker retries failed receipts
+async def receipt_retry_worker():
+    """Periodically retry posting failed receipts."""
+    while True:
+        receipt_json = await redis.brpop("receipt_retry_queue", timeout=10)
+        if receipt_json:
+            receipt = json.loads(receipt_json[1])
+            try:
+                await post_receipt_to_memorygate(receipt)
+                logger.info(f"Retry success: {receipt['receipt_id']}")
+            except Exception as e:
+                logger.error(f"Retry failed: {e}")
+                await redis.lpush("receipt_retry_queue", receipt_json[1])
+                await asyncio.sleep(30)  # Backoff
+```
+
+### Monitoring Receipt Emission
+
+Prometheus metrics for receipt emission:
+
+```python
+receipt_emissions_total = Counter(
+    "delegate_receipt_emissions_total",
+    "Total receipts emitted to MemoryGate",
+    ["delegate_id", "success"]
+)
+
+receipt_emission_duration = Histogram(
+    "delegate_receipt_emission_duration_seconds",
+    "Receipt emission latency"
+)
+
+receipt_retry_queue_size = Gauge(
+    "delegate_receipt_retry_queue_size",
+    "Number of receipts queued for retry"
+)
+
+plan_generation_with_receipt_duration = Histogram(
+    "delegate_plan_generation_with_receipt_duration_seconds",
+    "Total time to generate plan and emit receipt"
+)
+```
+
+### Receipt as Plan Proof
+
+Receipt serves as proof that plan was created:
+
+```python
+# Principal can query receipt to verify plan exists
+receipt = memorygate.read_inbox_receipt(receipt_id)
+
+# Receipt metadata includes plan details
+plan_id = receipt.metadata["plan_id"]
+delegate_id = receipt.metadata["delegate_id"]
+step_count = receipt.metadata["step_count"]
+
+# Fetch full plan from delegate registry
+plan = delegate.get_plan(plan_id)
+```
+
+### Receipt Configuration in Bootstrap
+
+DeleGate can query MemoryGate for receipt format rules:
+
+```python
+# Get receipt configuration from MemoryGate bootstrap
+async def get_receipt_config() -> dict:
+    """Fetch receipt schema and format rules from MemoryGate."""
+    bootstrap = await memorygate.memory_bootstrap("delegate", "system")
+    return bootstrap["receipt_config"]
+```
+
+### Receipt Emission Guarantees
+
+**At-least-once delivery:**
+- Receipt emitted immediately after plan stored in registry
+- Retry queue ensures eventual delivery even if MemoryGate temporarily down
+- Dedupe keys prevent duplicate receipts
+
+**Ordering:**
+- plan_created receipt emitted before Principal begins execution
+- Enables Principal to reference plan receipt_id when queueing AsyncGate tasks
+
+**Chaining:**
+- caused_by_receipt_id links plan to originating request
+- Creates complete audit trail from user input → plan → execution → completion
+
+---
+
+*Receipt integration added: 2026-01-04*  
+*See receipt_protocol.md for complete specification*  
+*See memorygate_receipt_store.md for MemoryGate implementation*

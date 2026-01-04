@@ -1,0 +1,415 @@
+# LegiVellum Decision List
+
+**Single merged list, prioritized for implementation**
+
+---
+
+## P0 — Spine Contracts
+*If these move, everything breaks*
+
+### Receipt Schema v1 (authoritative wire contract)
+
+**Requirements:**
+- Exact fields, types, required/optional, max sizes
+- Metadata policy
+- Validation rules
+- Error model
+
+**Indexing:**
+- Indexing keys + canonical query patterns
+  - Inbox queries
+  - Chain traversal
+  - Status filters
+
+**Serialization:**
+- Format decision: JSON vs Protobuf
+- Schema versioning strategy
+
+*Everything else speaks "receipt".*
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+### Receipt Identity + Pairing Semantics
+
+**Identity:**
+- `receipt_id` format (ULID/snowflake/etc)
+- Uniqueness source
+- Length/charset constraints
+
+**Pairing:**
+- Completion naming (`Complete.<root>` or explicit `pairs_with`)
+- Out-of-order handling
+- Multi-completion/retry rules
+- `dedupe_key` semantics
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+### Ownership + Escalation Rules
+*The "one receipt, one owner" law*
+
+**Ownership:**
+- Immutability of `recipient_ai` vs reassignment model
+- Escalation creates a new receipt (chain-of-custody)
+- Never CC/forward
+
+**Inbox Lifecycle:**
+- Read/archive/promote rules
+- Who is allowed to perform each operation
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+### Pointer Contract (ResultChannel)
+
+**Pointer Shape:**
+- Allowed schemes
+- Required metadata (mime/size/checksum?)
+
+**Rules:**
+- Pointers in receipts, payloads not in receipts
+- Who hosts artifacts
+- Access pattern
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+### Core Component Boundaries as Enforceable Constraints
+
+**MemoryGate:**
+- Passive
+- Pull-only
+- Single-writer for receipt store
+
+**AsyncGate:**
+- Lifecycle/leases
+- No "meaning"
+- No pointer registry
+
+**DeleGate:**
+- Plan-only
+- No execution
+- No waiting
+
+*This prevents accidental cross-contamination in code.*
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+## P1 — Service Shape
+*So you can lay down repos, APIs, and tests*
+
+### Deployment Topology + Repo Structure
+
+- Monorepo vs multi-repo
+- 1 deployable vs 3 services
+- Shared "spec + sdk" package location
+  - Receipt validation lib
+  - Types
+
+---
+
+### API Protocol + Standards
+
+**Protocol:**
+- REST vs gRPC vs hybrid
+
+**Standards:**
+- API versioning strategy
+- Pagination
+- Error envelope (Problem Details or custom)
+- Request auth headers + tracing headers conventions
+
+---
+
+### Identity Model
+*Agents, components, principals*
+
+**Canonical Representation:**
+- `recipient_ai`
+- `source_system`
+- `platform` fields
+
+**Mapping:**
+- Auth principal → source_system claims
+
+**Tenant Model:**
+- Single-tenant vs multi-tenant field-level decision
+- Even if single-tenant MVP, reserve `tenant_id`
+
+---
+
+### Security for Inter-Service Receipt Posting
+
+**Verification:**
+- How MemoryGate verifies AsyncGate/DeleGate identity
+- Options: mTLS/JWT/API keys
+
+**Permissions:**
+- Minimal permission model
+  - Who can post receipts
+  - Who can archive receipts
+  - Who can read whose inbox
+
+---
+
+### Canonical DB Choice + Migration Strategy
+
+**Database:**
+- PostgreSQL confirmed or not
+- Extension plan (pgvector if used)
+
+**Migrations:**
+- Migration tool
+- Schema ownership rules (especially if splitting services)
+
+---
+
+## P2 — MemoryGate Specifics
+*Because it is the "world bootstrap"*
+
+### Bootstrap Response Contract
+
+**Response Fields:**
+- Exact response fields
+  - Inbox structure
+  - Counts
+  - Topology
+  - Receipt_config
+
+**Performance:**
+- Limits/pagination
+- Performance targets
+- "What changed since last session" now vs deferred
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+### Receipt Store Table Design + Archival Mechanics
+
+**Status Model:**
+- Active/complete/archived (or separate tables)
+
+**Pairing Storage:**
+- `paired_with_uuid` etc.
+
+**Archival:**
+- Archival triggers + destination
+- Same DB table partition vs cold store
+
+---
+
+### Memory Primitives Schema
+
+**Schemas:**
+- Observations
+- Patterns
+- Concepts
+- Document references
+
+**Relationships:**
+- Relationship model
+- Evidence linking strategy (strings vs FK refs to receipts/docrefs)
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+### Semantic Search Choices
+*If in MVP*
+
+**Model:**
+- Embedding model + dimension
+- Re-embed policy
+
+**Storage:**
+- Vector store (pgvector vs external)
+- Index type + metric + thresholds
+
+---
+
+## P3 — AsyncGate Specifics
+*Unblocks real "time passes" behavior*
+
+### Queue Technology
+
+**Options:**
+- Postgres queue vs Redis/RabbitMQ/SQS
+
+**Guarantees:**
+- Delivery guarantee (at-least-once almost certainly)
+- Idempotency expectations
+
+---
+
+### Task State Machine
+
+**States:**
+- `queued` → `leased` → `running?` → `complete`/`failed` → `archived`
+
+**Clarification:**
+- Whether "running" is explicit or implied by lease
+
+---
+
+### Lease + Heartbeat Protocol
+
+**Parameters:**
+- Lease duration
+- Heartbeat interval
+- Expiry rules
+
+**Recovery:**
+- Orphan detection mechanism
+- Requeue policy and conflict rules
+- Late completion after requeue
+
+---
+
+### Retry + DLQ Policy
+
+**Strategy:**
+- Backoff strategy
+- Max retries
+- Terminal failure behavior
+
+**Escalation:**
+- What becomes `task_failed` requiring cognitive attention
+
+---
+
+### AsyncGate Receipt Emission Mapping
+
+**Receipt Events:**
+- Exact receipts on queue/complete/fail
+- How they chain (`caused_by`)
+
+**Auto-Pairing:**
+- Auto-pair triggers
+- What does completion pair to?
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+## P4 — DeleGate Specifics
+*Unblocks "intent → plan" determinism*
+
+### Plan Schema v1
+
+**Format:**
+- JSON schema
+  - Steps
+  - Dependencies
+  - `step_type` enum
+  - Params
+  - Outputs
+
+**Variables:**
+- Templating / variable reference rules
+- String interpolation vs JSON Pointer
+
+**Validation:**
+- Plan versioning and validation strictness
+
+*Reference: LegiVellum_Whitepaper*
+
+---
+
+### Worker Capability Descriptor + Discovery
+
+**Registry:**
+- Static registry vs registration API
+
+**Schema:**
+- Capability schema
+- Version constraints
+- Params schema
+
+---
+
+### Execution Semantics for Plans
+
+**Submission:**
+- How plans submit to AsyncGate (bulk vs stepwise)
+
+**Parallelism:**
+- Parallelism hints + dependency resolution rules
+
+**Receipts:**
+- Receipt rules: `plan_created` only, or per-step receipts too
+
+---
+
+### Intent → Plan Mechanism
+
+**LLM Integration:**
+- LLM provider(s)
+- Prompt strategy
+- Validation loop
+- Safe failure behavior
+
+**Storage:**
+- Where plans live (docref in MemoryGate vs separate store)
+
+---
+
+## P5 — Ops & Ergonomics
+*Don't skip, but they don't block first code*
+
+### Observability Standards
+
+**Logging:**
+- Logging fields (`receipt_id`, `caused_by`, `task_id`)
+
+**Monitoring:**
+- Metrics
+- Tracing strategy
+
+---
+
+### Artifact Storage Backend
+
+**MVP Options:**
+- S3/GCS/local/email-first MVP
+
+**Access:**
+- Presigned URL strategy
+- Lifecycle retention
+
+---
+
+### SDK Strategy
+
+**Targets:**
+- Language targets
+
+**Implementation:**
+- Shared types
+- Generated clients vs hand-rolled
+
+---
+
+### Local Dev + Test Harness
+
+**Infrastructure:**
+- Docker compose stack
+
+**Testing:**
+- Integration test flows
+  - Pairing
+  - Leasing
+  - Retries
+  - Escalation
+
+---
+
+*Document version: 2026-01-04*  
+*Technomancy Laboratories*

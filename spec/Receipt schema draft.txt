@@ -1,0 +1,679 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legivellum.dev/spec/receipt.schema.v1.json",
+  "title": "LegiVellum Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "A Receipt is the only coordination protocol. It represents an accepted obligation (accepted), a resolution of that obligation (complete), or a boundary/policy crossing that transfers/transforms responsibility (escalate). MemoryGate stores receipts as an immutable audit ledger.",
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "task_id",
+    "parent_task_id",
+    "caused_by_receipt_id",
+    "dedupe_key",
+    "attempt",
+    "from_principal",
+    "for_principal",
+    "source_system",
+    "recipient_ai",
+    "trust_domain",
+    "phase",
+    "status",
+    "realtime",
+    "task_type",
+    "task_summary",
+    "task_body",
+    "inputs",
+    "expected_outcome_kind",
+    "expected_artifact_mime",
+    "outcome_kind",
+    "outcome_text",
+    "artifact_location",
+    "artifact_pointer",
+    "artifact_checksum",
+    "artifact_size_bytes",
+    "artifact_mime",
+    "escalation_class",
+    "escalation_reason",
+    "escalation_to",
+    "retry_requested",
+    "created_at",
+    "stored_at",
+    "started_at",
+    "completed_at",
+    "read_at",
+    "archived_at",
+    "metadata"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Receipt schema version (e.g., '1.0')."
+    },
+
+    "receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Globally unique receipt identifier. Recommended: ULID (26 chars, sortable, collision-resistant). Client-generated before submission to enable offline operation and idempotent retries. Not allowed to be 'NA' or 'TBD' by policy."
+    },
+
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable correlation key for the full lifecycle of a task. Query all receipts with the same task_id to reconstruct task history. No pairing fields needed—relationships are derived via query."
+    },
+
+    "parent_task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "If this task was spawned/delegated from another task, this links to the parent task_id. Otherwise use 'NA'. Enables delegation tree traversal."
+    },
+
+    "caused_by_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Links to the specific receipt that caused this receipt to exist (e.g., the parent's accepted receipt, or an escalation receipt). Use 'NA' if none. Enables provenance chains."
+    },
+
+    "dedupe_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Idempotency key for de-duplication. Use 'NA' if not applicable."
+    },
+
+    "attempt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Retry counter. 0 = not applicable; otherwise starts at 1. Increment when retry_requested escalations occur."
+    },
+
+    "from_principal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Tasker / requester identity. Not allowed to be 'NA' or 'TBD' by policy."
+    },
+
+    "for_principal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Intended executor / taskee identity at task definition time. Not allowed to be 'NA' or 'TBD' by policy."
+    },
+
+    "source_system": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Component that issued this receipt (e.g., 'asyncgate', 'delegate', 'worker.xyz'). Not allowed to be 'NA' or 'TBD' by policy."
+    },
+
+    "recipient_ai": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Inbox owner who must see/act on this receipt. Not allowed to be 'NA' or 'TBD' by policy."
+    },
+
+    "trust_domain": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional label for routing/audit (e.g., 'local', 'cloud', 'external'). Use 'NA' if not applicable."
+    },
+
+    "phase": {
+      "type": "string",
+      "enum": ["accepted", "complete", "escalate"],
+      "description": "Lifecycle/event type. 'accepted' creates an obligation; 'complete' resolves it; 'escalate' transfers/transforms responsibility and does not require its own completion."
+    },
+
+    "status": {
+      "type": "string",
+      "enum": ["NA", "success", "failure", "canceled"],
+      "description": "Completion disposition. Must be non-NA when phase='complete'. Otherwise 'NA'."
+    },
+
+    "realtime": {
+      "type": "boolean",
+      "description": "Hint only. True if intended to run 'now' (still async-safe); false for queued/async work. Does not affect routing or priority in v1."
+    },
+
+    "task_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional classifier (e.g., 'write_doc', 'run_build'). Use 'NA' if not applicable."
+    },
+
+    "task_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short human-readable title. Must not be 'TBD' when phase='accepted' (inbox items must have meaningful summaries)."
+    },
+
+    "task_body": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Full task description/prompt. 'TBD' allowed. Keep under 100KB; use artifact_pointer for large prompts."
+    },
+
+    "inputs": {
+      "type": "object",
+      "description": "Structured inputs including pointers. Empty object allowed. Keep under 64KB; use artifact_pointer for large payloads.",
+      "additionalProperties": true
+    },
+
+    "expected_outcome_kind": {
+      "type": "string",
+      "enum": ["NA", "none", "response_text", "artifact_pointer", "mixed"],
+      "description": "What the task is expected to produce."
+    },
+
+    "expected_artifact_mime": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Expected MIME type if artifact is expected; else 'NA'."
+    },
+
+    "outcome_kind": {
+      "type": "string",
+      "enum": ["NA", "none", "response_text", "artifact_pointer", "mixed"],
+      "description": "What the completion actually produced. Must be non-NA on phase='complete'."
+    },
+
+    "outcome_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Text outcome if applicable; else 'NA'. Keep under 100KB; use artifact_pointer for large results."
+    },
+
+    "artifact_location": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Literal pointer/path to artifact. Can be s3://bucket/key, https://cdn/file, file:///path, memorygate://observation/123, mailto:results@example.com, or any valid URI. Use 'NA' if no artifact. NOT an enum—validates as any non-empty string."
+    },
+
+    "artifact_pointer": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque pointer/URI to artifact. Must be non-NA if outcome_kind includes artifact_pointer."
+    },
+
+    "artifact_checksum": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Checksum (e.g., 'sha256:abc123...') or 'NA'. Recommended for artifact integrity verification."
+    },
+
+    "artifact_size_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Artifact size in bytes. 0 if NA."
+    },
+
+    "artifact_mime": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Actual artifact MIME type or 'NA'."
+    },
+
+    "escalation_class": {
+      "type": "string",
+      "enum": ["NA", "owner", "capability", "trust", "policy", "scope", "other"],
+      "description": "Why escalation occurred. Must be non-NA when phase='escalate'. 'owner': cross-tier delegation; 'capability': worker lacks capability; 'trust': security boundary; 'policy': retry/timeout/quota; 'scope': task too complex; 'other': undefined."
+    },
+
+    "escalation_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable reason for escalation. Must not be 'TBD' when phase='escalate'."
+    },
+
+    "escalation_to": {
+      "type": "string",
+      "minLength": 1,
+      "description": "New owner/recipient if crossing an ownership boundary (must match recipient_ai for owner escalations); else 'NA' for in-place retry escalations."
+    },
+
+    "retry_requested": {
+      "type": "boolean",
+      "description": "True when this escalation is asking for a retry (usually policy class). New accepted receipt should increment 'attempt' field."
+    },
+
+    "created_at": {
+      "description": "Issuer clock time when receipt was formed. ISO 8601 format.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+
+    "stored_at": {
+      "description": "MemoryGate clock time when receipt was persisted. Source of truth for ordering. ISO 8601 format.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+
+    "started_at": {
+      "description": "Execution start time if applicable; else 'NA'. ISO 8601 format.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+
+    "completed_at": {
+      "description": "Completion time. Must be a date-time when phase='complete'. Otherwise 'NA'. ISO 8601 format.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+
+    "read_at": {
+      "description": "Inbox read time or 'NA'. Optional UX tracking. ISO 8601 format.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+
+    "archived_at": {
+      "description": "Archive time or 'NA'. ISO 8601 format.",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "enum": ["NA"] }
+      ]
+    },
+
+    "metadata": {
+      "type": "object",
+      "description": "Freeform metadata. Keep under 16KB. Empty object allowed.",
+      "additionalProperties": true
+    }
+  },
+
+  "allOf": [
+    {
+      "if": {
+        "properties": { "phase": { "const": "accepted" } }
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "NA" },
+          "completed_at": { "oneOf": [{ "type": "string", "enum": ["NA"] }] },
+          "task_summary": {
+            "not": { "enum": ["TBD"] }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "complete" } }
+      },
+      "then": {
+        "properties": {
+          "status": { "enum": ["success", "failure", "canceled"] },
+          "completed_at": { "oneOf": [{ "type": "string", "format": "date-time" }] },
+          "outcome_kind": { "enum": ["none", "response_text", "artifact_pointer", "mixed"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "escalate" } }
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "NA" },
+          "escalation_class": { "enum": ["owner", "capability", "trust", "policy", "scope", "other"] },
+          "escalation_reason": {
+            "not": { "enum": ["TBD"] }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "const": "escalate" },
+          "escalation_class": { "const": "owner" }
+        },
+        "required": ["phase", "escalation_class"]
+      },
+      "then": {
+        "properties": {
+          "escalation_to": {
+            "not": { "enum": ["NA"] }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "const": "complete" },
+          "outcome_kind": { "enum": ["artifact_pointer", "mixed"] }
+        },
+        "required": ["phase", "outcome_kind"]
+      },
+      "then": {
+        "properties": {
+          "artifact_pointer": {
+            "not": { "enum": ["NA"] }
+          },
+          "artifact_location": {
+            "not": { "enum": ["NA"] }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "retry_requested": { "const": true }
+        }
+      },
+      "then": {
+        "properties": {
+          "attempt": {
+            "minimum": 1
+          }
+        }
+      }
+    }
+  ],
+
+  "examples": [
+    {
+      "$comment": "Example 1: Accepted receipt (creates obligation)",
+      "schema_version": "1.0",
+      "receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+      "task_id": "T-01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+      "parent_task_id": "NA",
+      "caused_by_receipt_id": "NA",
+      "dedupe_key": "NA",
+      "attempt": 0,
+      "from_principal": "delegate.primary",
+      "for_principal": "asyncgate",
+      "source_system": "asyncgate",
+      "recipient_ai": "delegate.primary",
+      "trust_domain": "local",
+      "phase": "accepted",
+      "status": "NA",
+      "realtime": false,
+      "task_type": "write_doc",
+      "task_summary": "Draft LegiVellum receipt schema",
+      "task_body": "Create Receipt v1 JSON Schema and rules document.",
+      "inputs": {},
+      "expected_outcome_kind": "artifact_pointer",
+      "expected_artifact_mime": "application/json",
+      "outcome_kind": "NA",
+      "outcome_text": "NA",
+      "artifact_location": "NA",
+      "artifact_pointer": "NA",
+      "artifact_checksum": "NA",
+      "artifact_size_bytes": 0,
+      "artifact_mime": "NA",
+      "escalation_class": "NA",
+      "escalation_reason": "NA",
+      "escalation_to": "NA",
+      "retry_requested": false,
+      "created_at": "2026-01-04T16:20:00Z",
+      "stored_at": "2026-01-04T16:20:01Z",
+      "started_at": "NA",
+      "completed_at": "NA",
+      "read_at": "NA",
+      "archived_at": "NA",
+      "metadata": {}
+    },
+    {
+      "$comment": "Example 2: Complete receipt (resolves obligation)",
+      "schema_version": "1.0",
+      "receipt_id": "01HTZQ8T4D9Z9Z2RKR6Z9A0G7H",
+      "task_id": "T-01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+      "parent_task_id": "NA",
+      "caused_by_receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+      "dedupe_key": "NA",
+      "attempt": 0,
+      "from_principal": "worker.doc_writer",
+      "for_principal": "delegate.primary",
+      "source_system": "asyncgate",
+      "recipient_ai": "delegate.primary",
+      "trust_domain": "local",
+      "phase": "complete",
+      "status": "success",
+      "realtime": false,
+      "task_type": "write_doc",
+      "task_summary": "Draft LegiVellum receipt schema",
+      "task_body": "Create Receipt v1 JSON Schema and rules document.",
+      "inputs": {},
+      "expected_outcome_kind": "artifact_pointer",
+      "expected_artifact_mime": "application/json",
+      "outcome_kind": "artifact_pointer",
+      "outcome_text": "Schema created with 37 fields and conditional validation rules.",
+      "artifact_location": "s3://legivellum-artifacts/schemas/receipt-v1.json",
+      "artifact_pointer": "s3://legivellum-artifacts/schemas/receipt-v1.json",
+      "artifact_checksum": "sha256:a1b2c3d4e5f6...",
+      "artifact_size_bytes": 8192,
+      "artifact_mime": "application/json",
+      "escalation_class": "NA",
+      "escalation_reason": "NA",
+      "escalation_to": "NA",
+      "retry_requested": false,
+      "created_at": "2026-01-04T16:25:00Z",
+      "stored_at": "2026-01-04T16:25:01Z",
+      "started_at": "2026-01-04T16:20:05Z",
+      "completed_at": "2026-01-04T16:24:58Z",
+      "read_at": "NA",
+      "archived_at": "NA",
+      "metadata": {"worker_tier": "standard", "execution_time_ms": 293000}
+    },
+    {
+      "$comment": "Example 3: Escalate receipt (transfers responsibility)",
+      "schema_version": "1.0",
+      "receipt_id": "01HTZQ8U5E0A0A3SLS7A0B1H8I",
+      "task_id": "T-complex-analysis",
+      "parent_task_id": "NA",
+      "caused_by_receipt_id": "01HTZQ8U4E0A0A3SLS7A0B1H8H",
+      "dedupe_key": "NA",
+      "attempt": 1,
+      "from_principal": "worker.basic_analyst",
+      "for_principal": "delegate.advanced",
+      "source_system": "asyncgate",
+      "recipient_ai": "delegate.advanced",
+      "trust_domain": "local",
+      "phase": "escalate",
+      "status": "NA",
+      "realtime": false,
+      "task_type": "data_analysis",
+      "task_summary": "Analyze complex dataset with ML",
+      "task_body": "Full analysis of multi-dimensional data requiring ML capabilities.",
+      "inputs": {"dataset_uri": "s3://data/complex.csv"},
+      "expected_outcome_kind": "artifact_pointer",
+      "expected_artifact_mime": "application/json",
+      "outcome_kind": "NA",
+      "outcome_text": "NA",
+      "artifact_location": "NA",
+      "artifact_pointer": "NA",
+      "artifact_checksum": "NA",
+      "artifact_size_bytes": 0,
+      "artifact_mime": "NA",
+      "escalation_class": "capability",
+      "escalation_reason": "Task requires ML inference capabilities not available in basic worker tier.",
+      "escalation_to": "delegate.advanced",
+      "retry_requested": false,
+      "created_at": "2026-01-04T16:30:00Z",
+      "stored_at": "2026-01-04T16:30:01Z",
+      "started_at": "2026-01-04T16:25:05Z",
+      "completed_at": "NA",
+      "read_at": "NA",
+      "archived_at": "NA",
+      "metadata": {"worker_tier": "basic", "required_capabilities": ["ml_inference"]}
+    }
+  ]
+}
+
+---
+
+RECEIPT SCHEMA DOCUMENTATION
+
+## Pairing Mechanics
+
+This schema does NOT include pairing fields (e.g., pairs_with_receipt_id).
+Pairing makes no sense in an async protocol—relationships are derived cheaply via query.
+
+To find all receipts for a task lifecycle:
+  SELECT * FROM receipts WHERE task_id = ? ORDER BY stored_at;
+
+To find completion for a task (if exists):
+  SELECT * FROM receipts WHERE task_id = ? AND phase = 'complete';
+
+To find inbox items (unpaired = accepted and not archived):
+  SELECT * FROM receipts 
+  WHERE recipient_ai = ? 
+    AND phase = 'accepted' 
+    AND archived_at IS NULL;
+
+## Escalation Semantics
+
+Escalation is a BOUNDARY SIGNAL, not an executable instruction.
+Escalation transfers responsibility but does NOT schedule execution.
+
+### Escalation Flow (The Complete Contract)
+
+1. X accepts obligation
+   - X receives task request
+   - X emits 'accepted' receipt
+   - Creates X's obligation to either resolve or escalate
+
+2. X cannot resolve, escalates to Y
+   - X emits 'escalate' receipt
+   - Sets escalation_to = Y
+   - Sets recipient_ai = Y (lands in Y's inbox)
+   - THIS ENDS X'S OBLIGATION
+
+3. Y receives escalation in inbox
+   - Y did not issue this receipt but is now inbox owner
+   - This is the system's only soft push: boundary crossing requiring cognition/ownership change
+
+4. Y must accept responsibility EXPLICITLY
+   - Y creates NEW accepted receipt with:
+     * NEW task_id (fresh obligation instance, recommended)
+     * parent_task_id = original task_id
+     * caused_by_receipt_id = escalate receipt_id
+   - Alternative: same task_id (continuation, but blurs obligation tracking)
+
+5. Y resolves via normal means
+   - Y creates child tasks, plans, workers
+   - Work progresses and completes
+   - Y emits 'complete' receipt for their task_id
+
+### Critical Invariant
+
+An escalation receipt ends the issuer's obligation ONLY when it successfully
+transfers to a target inbox owner (recipient_ai = escalation_to).
+
+The new owner MUST create a new 'accepted' obligation (preferably new task_id)
+that references the escalation receipt.
+
+This provides:
+- Clean responsibility boundaries
+- Explicit acceptances
+- Full audit trails
+- No accidental "push execution" behavior
+
+## Escalation Classes
+
+owner: Cross-tier/cross-component delegation
+  - Requires: escalation_to set to new owner
+  - recipient_ai MUST equal escalation_to
+  - Creates: Ownership boundary crossing
+  - Example: Worker → DeleGate, Basic tier → Advanced tier
+
+capability: Worker lacks required capability
+  - Specify missing capability in escalation_reason
+  - Example: "Requires GPU for inference", "Needs database access"
+
+trust: Security/permission boundary crossing
+  - Example: Task requires elevated privileges, crosses trust domain
+
+policy: Retry, timeout, quota, backoff
+  - Often paired with retry_requested=true
+  - Example: Rate limit hit, temporary failure, resource exhaustion
+
+scope: Task too large/complex for current tier
+  - Example: "Requires breaking into subtasks", "Exceeds worker memory limits"
+
+other: Undefined/catchall
+  - Use when none of the above fit
+  - Document clearly in escalation_reason
+
+## Query Patterns
+
+### Find Task Lifecycle
+SELECT * FROM receipts 
+WHERE task_id = ? 
+ORDER BY stored_at;
+
+### Find Delegation Tree
+WITH RECURSIVE task_tree AS (
+  SELECT * FROM receipts WHERE task_id = ?
+  UNION ALL
+  SELECT r.* FROM receipts r
+  JOIN task_tree t ON r.parent_task_id = t.task_id
+)
+SELECT * FROM task_tree ORDER BY stored_at;
+
+### Find Escalation Chain
+WITH RECURSIVE escalation_chain AS (
+  SELECT * FROM receipts WHERE receipt_id = ?
+  UNION ALL
+  SELECT r.* FROM receipts r
+  JOIN escalation_chain e ON r.receipt_id = e.caused_by_receipt_id
+)
+SELECT * FROM escalation_chain ORDER BY stored_at DESC;
+
+### Inbox Query (Active Obligations)
+SELECT * FROM receipts
+WHERE recipient_ai = ?
+  AND phase = 'accepted'
+  AND archived_at IS NULL
+ORDER BY stored_at DESC;
+
+## Field Size Guidance
+
+inputs: Keep under 64KB (use artifact_pointer for large payloads)
+metadata: Keep under 16KB
+task_body: Keep under 100KB (use artifact_pointer for large prompts)
+outcome_text: Keep under 100KB (use artifact_pointer for large results)
+
+Validation enforced at API layer (HTTP 413 Payload Too Large).
+
+## Receipt Identity
+
+receipt_id: Client-generated ULID (26 chars, sortable, collision-resistant)
+  - Enables offline operation
+  - Enables idempotent retries
+  - Stable wire identifier
+
+UUID (DB internal, not in wire format):
+  - Server-assigned PostgreSQL gen_random_uuid()
+  - Primary key for database
+  - Not exposed in API responses
+
+## Timestamps
+
+created_at: Issuer clock (when receipt formed)
+stored_at: MemoryGate clock (SOURCE OF TRUTH for ordering)
+started_at: Execution start (optional)
+completed_at: Completion time (required for phase='complete')
+read_at: Inbox read tracking (optional UX)
+archived_at: Archive time (lifecycle management)
+
+All timestamps: ISO 8601 format or "NA"
+
+---
+
+Schema version: 1.0
+Last updated: 2026-01-04
+Technomancy Laboratories
