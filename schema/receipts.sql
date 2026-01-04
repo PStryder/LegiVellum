@@ -14,8 +14,11 @@ CREATE TABLE IF NOT EXISTS receipts (
   -- Schema version
   schema_version TEXT NOT NULL DEFAULT '1.0',
   
+  -- Multi-tenant support (future-proofing)
+  tenant_id TEXT NOT NULL DEFAULT 'pstryder',
+  
   -- Receipt identity
-  receipt_id TEXT NOT NULL UNIQUE,
+  receipt_id TEXT NOT NULL,
   
   -- Task correlation
   task_id TEXT NOT NULL,
@@ -110,27 +113,31 @@ CREATE TABLE IF NOT EXISTS receipts (
   
   CONSTRAINT retry_attempt_rules CHECK (
     NOT retry_requested OR attempt >= 1
-  )
+  ),
+  
+  -- Unique constraint for multi-tenant support
+  CONSTRAINT unique_receipt_per_tenant UNIQUE (tenant_id, receipt_id)
 );
 
 -- Create indexes (see receipt.indexes.sql for full index definitions)
--- Core indexes
-CREATE INDEX idx_receipts_task_id ON receipts(task_id);
-CREATE INDEX idx_receipts_recipient_ai ON receipts(recipient_ai);
-CREATE INDEX idx_receipts_parent_task_id ON receipts(parent_task_id);
-CREATE INDEX idx_receipts_caused_by ON receipts(caused_by_receipt_id);
-CREATE INDEX idx_receipts_stored_at ON receipts(stored_at);
+-- Core indexes (include tenant_id for partition efficiency)
+CREATE INDEX idx_receipts_task_id ON receipts(tenant_id, task_id);
+CREATE INDEX idx_receipts_recipient_ai ON receipts(tenant_id, recipient_ai);
+CREATE INDEX idx_receipts_parent_task_id ON receipts(tenant_id, parent_task_id);
+CREATE INDEX idx_receipts_caused_by ON receipts(tenant_id, caused_by_receipt_id);
+CREATE INDEX idx_receipts_stored_at ON receipts(tenant_id, stored_at);
 
 -- Composite indexes for optimized queries
-CREATE INDEX idx_receipts_inbox ON receipts(recipient_ai, phase, archived_at) 
+CREATE INDEX idx_receipts_inbox ON receipts(tenant_id, recipient_ai, phase, archived_at) 
 WHERE phase = 'accepted' AND archived_at IS NULL;
 
-CREATE INDEX idx_receipts_task_phase ON receipts(task_id, phase);
-CREATE INDEX idx_receipts_recipient_time ON receipts(recipient_ai, stored_at DESC);
+CREATE INDEX idx_receipts_task_phase ON receipts(tenant_id, task_id, phase);
+CREATE INDEX idx_receipts_recipient_time ON receipts(tenant_id, recipient_ai, stored_at DESC);
 
 -- Add comments for documentation
 COMMENT ON TABLE receipts IS 'LegiVellum receipt store - immutable audit ledger for task coordination';
 COMMENT ON COLUMN receipts.uuid IS 'Database internal primary key (not exposed in API)';
+COMMENT ON COLUMN receipts.tenant_id IS 'Tenant identifier for multi-tenant isolation. Single-tenant MVP uses default value. Server-assigned from auth token.';
 COMMENT ON COLUMN receipts.receipt_id IS 'Client-generated ULID - stable wire identifier';
 COMMENT ON COLUMN receipts.task_id IS 'Correlation key for task lifecycle (accepted → escalate → complete)';
 COMMENT ON COLUMN receipts.parent_task_id IS 'Links to parent task for delegation trees (NA if root)';

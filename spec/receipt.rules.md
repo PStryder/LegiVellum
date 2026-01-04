@@ -2,6 +2,28 @@
 
 Receipts are the **only** coordination protocol in LegiVellum. A receipt is an immutable, auditable record of an obligation being accepted, completed, or escalated across a boundary.
 
+## Multi-Tenant Identity Model
+
+### `tenant_id`
+- **Server-assigned** from authenticated context, never from client request
+- Enables multi-tenant isolation at database level
+- **MVP default**: `"pstryder"` (single tenant)
+- **Future**: Each user/org gets unique `tenant_id`
+
+### Agent Scoping
+- `recipient_ai` scopes agents **within** a tenant
+- Same agent name can exist across tenants without collision
+- Examples:
+  - `tenant_id: "pstryder", recipient_ai: "kee"`
+  - `tenant_id: "pstryder", recipient_ai: "hexy"`
+  - `tenant_id: "alice", recipient_ai: "kee"` (different tenant, same agent name)
+
+### Security Model
+- API extracts `tenant_id` from auth token (JWT claim or API key mapping)
+- Client cannot specify `tenant_id` in request
+- All queries automatically filtered by authenticated `tenant_id`
+- Receipts are tenant-isolated at database level
+
 ## Core Semantics
 
 ### `phase: accepted`
@@ -58,8 +80,12 @@ A task is considered:
 
 ## Query Patterns
 
-- **Inbox**: `recipient_ai = ? AND archived_at IS NULL AND phase != 'complete'`
-- **Task timeline**: `task_id = ? ORDER BY stored_at, created_at`
-- **Delegation tree**: `parent_task_id = ?`
-- **Provenance trace**: follow `caused_by_receipt_id` (application recursion)
+All queries are automatically scoped by `tenant_id` from authenticated context:
+
+- **Inbox**: `tenant_id = ? AND recipient_ai = ? AND archived_at IS NULL AND phase != 'complete'`
+- **Task timeline**: `tenant_id = ? AND task_id = ? ORDER BY stored_at, created_at`
+- **Delegation tree**: `tenant_id = ? AND parent_task_id = ?`
+- **Provenance trace**: follow `caused_by_receipt_id` within same `tenant_id` (application recursion)
+
+Where `tenant_id` is extracted from authentication, not client input.
 

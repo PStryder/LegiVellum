@@ -1,5 +1,6 @@
 {
   "schema_version": "1.0",
+  "tenant_id": "pstryder",
   "receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
   "task_id": "T-01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
   "parent_task_id": "NA",
