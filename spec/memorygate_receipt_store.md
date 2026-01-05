@@ -1,850 +1,482 @@
-# MemoryGate Receipt Store Implementation
+# MemoryGate Receipt Store Specification
 
-**Created:** 2026-01-03  
-**Updated:** 2026-01-04 (Refocused on implementation role)  
-**Status:** Implementation Specification  
-**Purpose:** Define MemoryGate's role as the receipt store for the Technomancy Trilogy
-
-**See `receipt_protocol.md` for universal receipt specification.**
+**Version:** 1.0  
+**Status:** Normative Implementation Specification  
+**Last Updated:** 2026-01-04  
+**Purpose:** Define MemoryGate's role as the passive receipt ledger for LegiVellum
 
 ---
 
-## MemoryGate's Role
+## Overview
 
-MemoryGate is the **single-writer receipt store** and **bootstrap provider** for the cognitive cluster.
+MemoryGate is the **single-writer receipt store** and **source of truth** for all coordination in the LegiVellum system.
 
 **Core Responsibilities:**
-1. Accept receipt POST requests from trilogy components
+1. Accept receipt POST requests from components
 2. Validate receipts against schema
-3. Store receipts in database (dual ID system)
-4. Automatically pair completion receipts with roots
-5. Return receipts in bootstrap (configuration + inbox)
-6. Provide external audit API for compliance
+3. Store receipts in PostgreSQL (append-only ledger)
+4. Provide inbox and bootstrap queries
+5. Enable audit trail reconstruction
 
-**MemoryGate is a passive ledger, not a coordinator:**
-- ✓ Accepts writes, validates, stores
-- ✓ Answers explicit queries  
-- ✗ Does NOT push notifications
-- ✗ Does NOT coordinate work
-- ✗ Does NOT interpret receipt meaning
+**What MemoryGate Is:**
+- ✓ Passive ledger (accepts writes, answers queries)
+- ✓ Single source of truth for receipts
+- ✓ Bootstrap provider (configuration + inbox on session start)
+- ✓ Audit trail foundation
+
+**What MemoryGate Is NOT:**
+- ✗ Coordinator (does not push notifications)
+- ✗ Executor (does not run tasks)
+- ✗ Decision maker (does not interpret receipts)
+- ✗ State machine (receipts are immutable events, not mutable state)
+
+---
+
+## Design Principles
+
+### 1. Passivity Is Strength
+
+MemoryGate **never volunteers information**. It only responds to explicit queries.
+
+- Components POST receipts → MemoryGate validates and stores
+- Components query inbox → MemoryGate returns matching receipts
+- Components query bootstrap → MemoryGate returns configuration
+- MemoryGate does NOT push updates or send notifications
+
+### 2. Single Writer
+
+Only MemoryGate writes to the receipts table. All other components POST receipts to MemoryGate via API.
+
+This prevents:
+- Data corruption from concurrent writes
+- Schema validation bypass
+- Timestamp inconsistency
+- tenant_id spoofing
+
+### 3. Derived State, Not Stored State
+
+MemoryGate does NOT maintain "task status" or "pairing" as stored fields.
+
+Task state is **derived** from receipt history:
+- Open = `accepted` receipt exists AND no `complete` receipt for same `task_id`
+- Resolved = `complete` receipt exists for `task_id`
+- Escalated = `escalate` receipt exists for `task_id`
+
+Clients reconstruct state via queries, not stored flags.
+
+### 4. Immutability
+
+Receipts are **append-only**. Once stored, they never change.
+
+Updates are modeled as:
+- New receipts (e.g., `complete` after `accepted`)
+- Archive flag (`archived_at` timestamp)
+
+The only mutable field is `archived_at` (soft delete).
 
 ---
 
 ## Database Schema
 
-### Receipt Table
+See `/schema/receipts.sql` for the complete DDL.
 
-```sql
-CREATE TABLE receipts (
-    -- Dual identity (see receipt_protocol.md)
-    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    receipt_id VARCHAR(200) UNIQUE NOT NULL,
-    
-    -- What happened?
-    event_type VARCHAR(50) NOT NULL,
-    summary TEXT NOT NULL,
-    
-    -- Who owns response?
-    recipient_ai VARCHAR(50) NOT NULL,
-    source_system VARCHAR(50) NOT NULL,
-    
-    -- Where is artifact?
-    artifact_pointer VARCHAR(500),
-    artifact_location VARCHAR(100),
-    
-    -- What's next?
-    requires_action BOOLEAN DEFAULT FALSE,
-    suggested_next_step TEXT,
-    
-    -- Chaining (provenance)
-    caused_by_receipt_id VARCHAR(200) REFERENCES receipts(receipt_id),
-    
-    -- Pairing (completion tracking)
-    paired_with_uuid UUID REFERENCES receipts(uuid),
-    
-    -- Status lifecycle
-    status VARCHAR(20) DEFAULT 'active',
-    
-    -- Deduplication
-    dedupe_key VARCHAR(200) UNIQUE NOT NULL,
-    
-    -- Extensibility
-    metadata JSONB,
-    
-    -- Timestamps
-    created_at TIMESTAMP DEFAULT NOW(),
-    delivered_at TIMESTAMP,
-    read_at TIMESTAMP,
-    archived_at TIMESTAMP,
-    
-    -- Indexes
-    INDEX idx_unpaired (recipient_ai, status) WHERE status = 'active' AND paired_with_uuid IS NULL,
-    INDEX idx_chain (caused_by_receipt_id),
-    INDEX idx_pairing (paired_with_uuid),
-    INDEX idx_event_type (event_type, created_at),
-    INDEX idx_source_system (source_system, created_at),
-    INDEX idx_recipient_active (recipient_ai, status, created_at) WHERE status = 'active'
-);
-```
+### Key Design Choices
 
-### Indexes Rationale
+**Dual Identity System:**
+- `uuid` - Database internal primary key (not exposed in API)
+- `receipt_id` - Client-generated ULID, stable wire identifier
+- Composite unique constraint: `(tenant_id, receipt_id)`
 
-**idx_unpaired:** Bootstrap queries for actionable receipts
-**idx_chain:** Walking receipt chains for audit
-**idx_pairing:** Finding paired receipts
-**idx_event_type:** Analytics and monitoring
-**idx_source_system:** System-level debugging
-**idx_recipient_active:** Per-AI inbox queries
+**Multi-Tenant Isolation:**
+- `tenant_id` - Required field, server-assigned from auth
+- All queries filtered by `tenant_id`
+- All indexes lead with `tenant_id` for partition efficiency
+
+**Timestamp Semantics:**
+- `stored_at` - MemoryGate clock, source of truth for ordering
+- `created_at` - Issuer clock, forensic only (may be `null`)
+- `completed_at` - Required for `phase=complete`, `null` otherwise
+- `started_at`, `read_at`, `archived_at` - Optional, may be `null`
+
+**Phase-Based Constraints:**
+- Database CHECK constraints enforce phase-specific invariants
+- See `schema/receipts.sql` for complete constraint definitions
 
 ---
 
-## Internal API (Service-to-Service)
+## API Endpoints
 
-### POST /internal/receipt
+### POST /receipts
 
-Accept receipt submission from trilogy components.
-
-**Authentication:** Service token (X-Service-Token header)
+**Purpose:** Store a new receipt
 
 **Request:**
-```http
-POST /internal/receipt
-Headers:
-    X-Service-Token: <shared_secret>
+```json
+POST /receipts
+Authorization: Bearer <token>
 Content-Type: application/json
 
-Body:
 {
-    "receipt_id": "R.20260104_095023_450.kee.origin_abc",
-    "event_type": "task_received",
-    "recipient_ai": "kee",
-    "source_system": "external_system",
-    "summary": "Analyze codebase and suggest improvements",
-    "artifact_pointer": null,
-    "artifact_location": null,
-    "requires_action": true,
-    "suggested_next_step": "Create plan for code analysis",
-    "caused_by_receipt_id": null,
-    "dedupe_key": "external_system:task_abc:v1",
-    "metadata": {
-        "source_user": "pstryder",
-        "priority": "high"
+  "schema_version": "1.0",
+  "tenant_id": "pstryder",  // Ignored - server extracts from auth
+  "receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+  "phase": "accepted",
+  ...  // Full receipt per schema
+}
+```
+
+**Response (Success):**
+```json
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{
+  "receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+  "stored_at": "2026-01-04T17:30:00Z",
+  "tenant_id": "pstryder"  // Server-assigned from auth
+}
+```
+
+**Response (Validation Error):**
+```json
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{
+  "error": "validation_failed",
+  "details": [
+    {
+      "field": "completed_at",
+      "constraint": "must_be_non_null_when_phase_complete",
+      "message": "completed_at is required when phase=complete"
     }
+  ]
 }
 ```
 
-**Responses:**
+**Validation Steps:**
+1. Extract `tenant_id` from auth token (JWT or API key)
+2. Validate against `spec/receipt.schema.v1.json`
+3. Enforce application-level constraints:
+   - Routing invariant: `recipient_ai == escalation_to` when `phase=escalate`
+   - Field size limits (inputs <64KB, metadata <16KB, etc.)
+4. Insert with server-assigned `tenant_id` and `stored_at = NOW()`
 
-```http
-200 OK - Success
-{
-    "status": "stored",
-    "uuid": "550e8400-e29b-41d4-a716-446655440000"
-}
+---
 
-409 Conflict - Duplicate (idempotent success)
-{
-    "error": "duplicate_receipt",
-    "existing_uuid": "550e8400-...",
-    "message": "Receipt with this dedupe_key already exists"
-}
+### GET /inbox
 
-400 Bad Request - Validation failed
-{
-    "error": "validation_failed",
-    "field": "receipt_id",
-    "message": "Invalid receipt_id format: must match R.{timestamp}.{component}.{ref}"
-}
+**Purpose:** Retrieve active obligations for an agent
 
-403 Forbidden - Invalid service token
-{
-    "error": "auth_failed",
-    "message": "Invalid or missing service token"
-}
+**Request:**
+```
+GET /inbox?recipient_ai=kee&limit=20
+Authorization: Bearer <token>
+```
 
-503 Service Unavailable - Database down
+**Response:**
+```json
+HTTP/1.1 200 OK
+Content-Type: application/json
+
 {
-    "error": "storage_unavailable",
-    "message": "Receipt store temporarily unavailable"
+  "tenant_id": "pstryder",
+  "recipient_ai": "kee",
+  "count": 3,
+  "receipts": [
+    {
+      "receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+      "task_id": "T-123",
+      "phase": "accepted",
+      "stored_at": "2026-01-04T17:30:00Z",
+      ...
+    },
+    ...
+  ]
 }
 ```
 
-**Implementation:**
-```python
-@app.post("/internal/receipt")
-async def create_receipt(request: Request, receipt: ReceiptSubmission):
-    # 1. Authenticate
-    token = request.headers.get("X-Service-Token")
-    expected_token = get_service_token(receipt.source_system)
-    
-    if not secrets.compare_digest(token or "", expected_token):
-        raise HTTPException(403, "Invalid service token")
-    
-    # 2. Validate schema
-    errors = validate_receipt_schema(receipt)
-    if errors:
-        raise HTTPException(400, {"error": "validation_failed", "fields": errors})
-    
-    # 3. Check for duplicate
-    existing = db.query("SELECT uuid FROM receipts WHERE dedupe_key = ?", receipt.dedupe_key)
-    if existing:
-        return {"status": "duplicate", "uuid": existing.uuid}
-    
-    # 4. Store receipt
-    try:
-        uuid = db.insert("INSERT INTO receipts (...) VALUES (...)")
-        
-        # 5. Auto-pair if completion receipt
-        if receipt.receipt_id.startswith("Complete."):
-            await auto_pair_completion(receipt.receipt_id, uuid)
-        
-        return {"status": "stored", "uuid": uuid}
-    
-    except DatabaseError as e:
-        logger.error(f"Failed to store receipt: {e}")
-        raise HTTPException(503, "Receipt store temporarily unavailable")
+**Query:**
+```sql
+SELECT * FROM receipts
+WHERE tenant_id = ? AND
+      recipient_ai = ? AND
+      phase = 'accepted' AND
+      archived_at IS NULL
+ORDER BY stored_at DESC
+LIMIT ?;
 ```
 
 ---
 
-## Automatic Pairing Logic
+### POST /bootstrap
 
-When completion receipt arrives, MemoryGate automatically pairs it with root.
+**Purpose:** Initialize a new session with configuration and inbox
 
-**Pairing Algorithm:**
-```python
-async def auto_pair_completion(completion_receipt_id: str, completion_uuid: UUID):
-    """
-    Auto-pair completion receipt with its root.
-    
-    1. Extract root receipt_id from completion
-    2. Find root in database
-    3. Update both with cross-references
-    4. Mark both as 'complete'
-    """
-    # Extract root: "Complete.R.20260104_095023_450.kee.task_x" → "R.20260104_095023_450.kee.task_x"
-    root_receipt_id = completion_receipt_id.replace("Complete.", "", 1)
-    
-    # Find root receipt
-    root = db.query("SELECT uuid FROM receipts WHERE receipt_id = ?", root_receipt_id)
-    
-    if not root:
-        # Orphaned completion - log and store anyway
-        logger.warning(f"Orphaned completion: {completion_receipt_id} has no matching root")
-        return
-    
-    # Update both receipts
-    db.execute("""
-        UPDATE receipts
-        SET paired_with_uuid = ?,
-            status = 'complete'
-        WHERE receipt_id = ?
-    """, [completion_uuid, root_receipt_id])
-    
-    db.execute("""
-        UPDATE receipts
-        SET paired_with_uuid = ?,
-            status = 'complete'
-        WHERE uuid = ?
-    """, [root.uuid, completion_uuid])
-    
-    logger.info(f"Paired receipts: {root_receipt_id} ↔ {completion_receipt_id}")
-```
+**Request:**
+```json
+POST /bootstrap
+Authorization: Bearer <token>
+Content-Type: application/json
 
-**Retroactive Pairing:**
-
-If completion arrives before root (out-of-order delivery):
-```python
-async def on_root_receipt_insert(root_receipt_id: str, root_uuid: UUID):
-    """
-    Check for orphaned completion and pair if exists.
-    """
-    completion_receipt_id = f"Complete.{root_receipt_id}"
-    
-    completion = db.query("SELECT uuid FROM receipts WHERE receipt_id = ?", completion_receipt_id)
-    
-    if completion:
-        # Found orphaned completion - pair now
-        await pair_receipts(root_uuid, completion.uuid)
-        logger.info(f"Retroactively paired: {root_receipt_id} ↔ {completion_receipt_id}")
-```
-
----
-
-## MCP Tools (AI-Facing Interface)
-
-### Enhanced memory_bootstrap()
-
-Existing tool extended to include receipt configuration and inbox.
-
-```python
-@mcp.tool()
-def memory_bootstrap(ai_name: str, ai_platform: str) -> dict:
-    """
-    Initialize AI session with memory state, configuration, and inbox.
-    
-    Returns:
-        - Observations, patterns, concepts (existing)
-        - Receipt configuration (NEW)
-        - Cluster topology (NEW)
-        - Active inbox receipts (NEW)
-    """
-    # Update last_seen for AI instance
-    update_ai_seen(ai_name, ai_platform)
-    
-    # Get receipt configuration
-    receipt_config = {
-        "schema_version": "1.0.0",
-        "format_rules": {
-            "root_pattern": "R.{timestamp}.{component}.{reference}",
-            "completion_pattern": "Complete.{root_receipt_id}",
-            "timestamp_format": "YYYYMMDD_HHmmss_SSS"
-        },
-        "event_types": ["task_received", "plan_created", "task_queued", 
-                       "task_complete", "task_failed", "escalation"],
-        "required_fields": ["receipt_id", "event_type", "recipient_ai", 
-                          "source_system", "summary", "dedupe_key"]
-    }
-    
-    # Get cluster topology
-    cluster_topology = {
-        "memorygate_url": os.getenv("MEMORYGATE_PUBLIC_URL"),
-        "asyncgate_url": os.getenv("ASYNCGATE_URL"),
-        "delegate_endpoints": get_delegate_registry(),
-        "mcp_workers": get_worker_registry()
-    }
-    
-    # Get active inbox (unpaired receipts requiring action)
-    inbox_receipts = db.execute("""
-        UPDATE receipts
-        SET delivered_at = COALESCE(delivered_at, NOW())
-        WHERE recipient_ai = :ai_name
-          AND status = 'active'
-          AND paired_with_uuid IS NULL
-        RETURNING 
-            receipt_id, event_type, summary, 
-            source_system, requires_action, 
-            artifact_pointer, created_at
-        ORDER BY created_at DESC
-        LIMIT 10
-    """, {"ai_name": ai_name})
-    
-    unpaired_count = db.scalar("""
-        SELECT COUNT(*) FROM receipts
-        WHERE recipient_ai = :ai_name
-          AND status = 'active'
-          AND paired_with_uuid IS NULL
-    """, {"ai_name": ai_name})
-    
-    return {
-        # Existing fields
-        "observations_count": get_observation_count(ai_name),
-        "patterns_count": get_pattern_count(),
-        "concepts_count": get_concept_count(),
-        
-        # Receipt system (NEW)
-        "receipt_config": receipt_config,
-        "connected_services": cluster_topology,
-        
-        # Active inbox (NEW)
-        "inbox_receipts": inbox_receipts,
-        "unpaired_count": unpaired_count,
-        "inbox_more_waiting": max(0, unpaired_count - len(inbox_receipts))
-    }
-```
-
-### New Inbox Management Tools
-
-```python
-@mcp.tool()
-def get_inbox_receipts(
-    unread_only: bool = True,
-    limit: int = 20,
-    source_system: str = None,
-    event_type: str = None
-) -> list[dict]:
-    """
-    Query inbox receipts with filters.
-    
-    Args:
-        unread_only: Only show unread receipts (default true)
-        limit: Max receipts to return (default 20, max 100)
-        source_system: Filter by source (e.g., "asyncgate")
-        event_type: Filter by event type (e.g., "task_complete")
-    
-    Returns:
-        List of receipt dictionaries
-    """
-    query = """
-        SELECT receipt_id, event_type, summary, source_system,
-               artifact_pointer, artifact_location, requires_action,
-               caused_by_receipt_id, created_at, metadata
-        FROM receipts
-        WHERE recipient_ai = :ai_name
-          AND status = 'active'
-    """
-    
-    params = {"ai_name": get_current_ai()}
-    
-    if unread_only:
-        query += " AND read_at IS NULL"
-    
-    if source_system:
-        query += " AND source_system = :source_system"
-        params["source_system"] = source_system
-    
-    if event_type:
-        query += " AND event_type = :event_type"
-        params["event_type"] = event_type
-    
-    query += " ORDER BY created_at DESC LIMIT :limit"
-    params["limit"] = min(limit, 100)
-    
-    return db.execute(query, params)
-
-@mcp.tool()
-def read_inbox_receipt(receipt_id: str) -> dict:
-    """
-    Mark receipt as read and return full details.
-    
-    Sets read_at timestamp and returns complete receipt including metadata.
-    """
-    db.execute("""
-        UPDATE receipts
-        SET read_at = COALESCE(read_at, NOW())
-        WHERE receipt_id = :receipt_id
-          AND recipient_ai = :ai_name
-    """, {"receipt_id": receipt_id, "ai_name": get_current_ai()})
-    
-    receipt = db.query("""
-        SELECT * FROM receipts
-        WHERE receipt_id = :receipt_id
-          AND recipient_ai = :ai_name
-    """, {"receipt_id": receipt_id, "ai_name": get_current_ai()})
-    
-    if not receipt:
-        raise NotFoundError(f"Receipt {receipt_id} not found or not owned by you")
-    
-    return receipt
-
-@mcp.tool()
-def archive_inbox_receipt(receipt_id: str) -> dict:
-    """
-    Archive a receipt (hides from active inbox, preserves for audit).
-    
-    Sets archived_at timestamp and changes status to 'archived'.
-    """
-    result = db.execute("""
-        UPDATE receipts
-        SET archived_at = NOW(),
-            status = 'archived'
-        WHERE receipt_id = :receipt_id
-          AND recipient_ai = :ai_name
-          AND status = 'active'
-        RETURNING receipt_id
-    """, {"receipt_id": receipt_id, "ai_name": get_current_ai()})
-    
-    if not result:
-        raise NotFoundError(f"Receipt {receipt_id} not found, already archived, or not owned by you")
-    
-    return {"status": "archived", "receipt_id": receipt_id}
-```
-
----
-
-## External Audit API
-
-Read-only queries for compliance and monitoring.
-
-**Authentication:** External API key (different from service tokens)
-
-### GET /external/receipt-chain
-
-```http
-GET /external/receipt-chain?root=R.20260104_095023_450.kee.origin_abc
-Headers:
-    Authorization: Bearer <external_api_key>
-
-Response (200 OK):
 {
-    "root_receipt_id": "R.20260104_095023_450.kee.origin_abc",
-    "status": "complete",
-    "chain": [
-        {
-            "receipt_id": "R.20260104_095023_450.kee.origin_abc",
-            "event_type": "task_received",
-            "summary": "Analyze codebase",
-            "created_at": "2026-01-04T09:50:23.450Z",
-            "caused_by_receipt_id": null
-        },
-        {
-            "receipt_id": "R.20260104_095024_120.delegate.plan_xyz",
-            "event_type": "plan_created",
-            "created_at": "2026-01-04T09:50:24.120Z",
-            "caused_by_receipt_id": "R.20260104_095023_450.kee.origin_abc"
-        },
-        {
-            "receipt_id": "Complete.R.20260104_095023_450.kee.origin_abc",
-            "event_type": "task_complete",
-            "created_at": "2026-01-04T10:05:20.100Z",
-            "paired_with": "R.20260104_095023_450.kee.origin_abc"
-        }
-    ],
-    "completion_timestamp": "2026-01-04T10:05:20.100Z",
-    "total_duration_seconds": 897
+  "agent_name": "kee",
+  "session_id": "sess-abc123"
 }
 ```
 
-**Implementation:**
-```python
-@app.get("/external/receipt-chain")
-async def get_receipt_chain(root: str, auth: str = Header(...)):
-    validate_external_api_key(auth)
-    
-    # Walk chain from root
-    chain = []
-    current_id = root
-    
-    while current_id:
-        receipt = db.query("SELECT * FROM receipts WHERE receipt_id = ?", current_id)
-        if not receipt:
-            break
-        
-        chain.append(receipt)
-        
-        # Find children (receipts caused by this one)
-        children = db.query("""
-            SELECT receipt_id FROM receipts 
-            WHERE caused_by_receipt_id = ?
-            ORDER BY created_at ASC
-        """, current_id)
-        
-        current_id = children[0].receipt_id if children else None
-    
-    # Find completion receipt
-    completion = db.query("""
-        SELECT * FROM receipts
-        WHERE receipt_id = ?
-    """, f"Complete.{root}")
-    
-    if completion:
-        chain.append(completion)
-    
-    return {
-        "root_receipt_id": root,
-        "status": "complete" if completion else "in_progress",
-        "chain": chain,
-        "completion_timestamp": completion.created_at if completion else None
-    }
-```
+**Response:**
+```json
+HTTP/1.1 200 OK
+Content-Type: application/json
 
-### GET /external/work-in-flight
-
-```http
-GET /external/work-in-flight?recipient_ai=kee
-Headers:
-    Authorization: Bearer <external_api_key>
-
-Response (200 OK):
 {
-    "recipient_ai": "kee",
-    "unpaired_receipts": [
-        {
-            "receipt_id": "R.20260104_095023_450.kee.origin_abc",
-            "event_type": "task_received",
-            "summary": "Analyze codebase",
-            "created_at": "2026-01-04T09:50:23.450Z",
-            "age_seconds": 1234
-        }
-    ],
-    "count": 1
+  "tenant_id": "pstryder",
+  "agent_name": "kee",
+  "session_id": "sess-abc123",
+  "config": {
+    "receipt_schema_version": "1.0",
+    "memorygate_url": "https://memorygate.example.com",
+    "capabilities": ["receipts", "semantic_memory", "audit"]
+  },
+  "inbox": {
+    "count": 3,
+    "receipts": [...]
+  },
+  "recent_context": {
+    "last_10_receipts": [...],
+    "recent_patterns": [...]
+  }
 }
 ```
 
----
-
-## Service Token Management
-
-### Token Generation
-
-```python
-import secrets
-
-def generate_service_token(source_system: str) -> str:
-    """Generate cryptographically secure service token."""
-    token = secrets.token_urlsafe(64)
-    
-    db.execute("""
-        INSERT INTO service_tokens (source_system, token_hash, created_at)
-        VALUES (?, ?, NOW())
-    """, [source_system, hash_token(token)])
-    
-    return token
-
-# Store in both systems:
-# AsyncGate: MEMORYGATE_SERVICE_TOKEN=<token>
-# MemoryGate: ASYNCGATE_SERVICE_TOKEN_HASH=<hash>
-```
-
-### Token Validation
-
-```python
-def validate_service_token(source_system: str, token: str) -> bool:
-    """Validate service token against stored hash."""
-    stored_hash = db.scalar("""
-        SELECT token_hash FROM service_tokens
-        WHERE source_system = ? AND revoked_at IS NULL
-    """, source_system)
-    
-    if not stored_hash:
-        return False
-    
-    return secrets.compare_digest(hash_token(token), stored_hash)
-```
-
-### Token Rotation
-
-```python
-def rotate_service_token(source_system: str) -> str:
-    """Generate new token and revoke old one."""
-    # Revoke existing
-    db.execute("""
-        UPDATE service_tokens
-        SET revoked_at = NOW()
-        WHERE source_system = ? AND revoked_at IS NULL
-    """, source_system)
-    
-    # Generate new
-    return generate_service_token(source_system)
-```
+**Purpose:** Provide everything an agent needs to resume work:
+- Active obligations (inbox)
+- Recent context (last actions)
+- Configuration (endpoints, schema version)
 
 ---
 
-## Rate Limiting
+### GET /receipts/task/:task_id
 
-Prevent receipt spam from compromised or buggy components.
+**Purpose:** Retrieve all receipts for a task (lifecycle timeline)
 
-```python
-# Per source_system limits
-RATE_LIMITS = {
-    "asyncgate": 1000,  # receipts/hour
-    "delegate": 500,
-    "principal": 100,
-    "default": 50
+**Request:**
+```
+GET /receipts/task/T-123?sort=asc
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "tenant_id": "pstryder",
+  "task_id": "T-123",
+  "receipts": [
+    {"receipt_id": "...", "phase": "accepted", "stored_at": "..."},
+    {"receipt_id": "...", "phase": "complete", "stored_at": "..."}
+  ]
 }
+```
 
-async def check_rate_limit(source_system: str):
-    """Check if source_system has exceeded rate limit."""
-    key = f"receipt_rate:{source_system}"
-    count = redis.incr(key)
-    
-    if count == 1:
-        redis.expire(key, 3600)  # 1 hour window
-    
-    limit = RATE_LIMITS.get(source_system, RATE_LIMITS["default"])
-    
-    if count > limit:
-        raise HTTPException(429, f"Rate limit exceeded: {limit}/hour")
+**Query:**
+```sql
+SELECT * FROM receipts
+WHERE tenant_id = ? AND task_id = ?
+ORDER BY stored_at ASC;
 ```
 
 ---
 
-## Monitoring & Observability
+### GET /receipts/chain/:receipt_id
 
-### Key Metrics
+**Purpose:** Retrieve escalation/causation chain (recursive provenance)
 
-Prometheus metrics exposed:
+**Request:**
+```
+GET /receipts/chain/01HTZQ9A7J6Z3F7C5N8V1K2M3P
+Authorization: Bearer <token>
+```
 
-```python
-# Receipt volume
-receipt_submissions_total = Counter(
-    "memorygate_receipt_submissions_total",
-    "Total receipt submissions",
-    ["source_system", "event_type", "status"]
+**Response:**
+```json
+{
+  "root_receipt_id": "01HTZQ9A7J6Z3F7C5N8V1K2M3P",
+  "chain": [
+    {"receipt_id": "...", "caused_by_receipt_id": "NA"},
+    {"receipt_id": "...", "caused_by_receipt_id": "..."},
+    ...
+  ]
+}
+```
+
+**Query (PostgreSQL Recursive CTE):**
+```sql
+WITH RECURSIVE chain AS (
+  SELECT * FROM receipts 
+  WHERE tenant_id = ? AND receipt_id = ?
+  UNION ALL
+  SELECT r.* FROM receipts r
+  JOIN chain c ON r.caused_by_receipt_id = c.receipt_id
+  WHERE r.tenant_id = ?
 )
-
-# Pairing success
-receipt_pairings_total = Counter(
-    "memorygate_receipt_pairings_total",
-    "Total receipt pairings",
-    ["success"]
-)
-
-# Active receipts
-active_receipts_gauge = Gauge(
-    "memorygate_active_receipts",
-    "Current number of active unpaired receipts",
-    ["recipient_ai"]
-)
-
-# Storage latency
-receipt_storage_duration = Histogram(
-    "memorygate_receipt_storage_duration_seconds",
-    "Receipt storage latency"
-)
-```
-
-### Health Check
-
-```python
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for load balancers."""
-    try:
-        # Test database connectivity
-        db.query("SELECT 1")
-        
-        # Test receipt store
-        receipt_count = db.scalar("SELECT COUNT(*) FROM receipts")
-        
-        return {
-            "status": "healthy",
-            "receipt_count": receipt_count,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        raise HTTPException(503, "Service unhealthy")
+SELECT * FROM chain ORDER BY stored_at;
 ```
 
 ---
 
-## Data Retention & Archiving
+## Indexes
 
-### Automatic Archiving
+See `/spec/receipt.indexes.sql` for complete index definitions.
 
-Daily cron job archives old complete receipts:
+**Core indexes (all lead with `tenant_id`):**
+1. `idx_receipts_task_id` - Task lifecycle queries
+2. `idx_receipts_recipient_ai` - Inbox queries
+3. `idx_receipts_parent_task_id` - Delegation tree traversal
+4. `idx_receipts_caused_by` - Provenance chains
+5. `idx_receipts_stored_at` - Chronological ordering
 
+**Composite indexes:**
+6. `idx_receipts_inbox` - Partial index for active accepted receipts
+7. `idx_receipts_task_phase` - Task + phase queries
+8. `idx_receipts_recipient_time` - Recent inbox items (DESC ordering)
+
+---
+
+## Validation Rules
+
+### Schema Validation
+
+All receipts MUST validate against `/spec/receipt.schema.v1.json`.
+
+Validation performed on POST:
+1. JSON Schema validation
+2. Application-level constraints (routing invariant)
+3. Field size limits (HTTP 413 if exceeded)
+
+### Application-Level Constraints
+
+**Routing Invariant (Phase: escalate):**
 ```python
-def archive_old_receipts(retention_days: int = 90):
-    """Archive receipts older than retention period."""
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
-    
-    result = db.execute("""
-        UPDATE receipts
-        SET status = 'archived',
-            archived_at = NOW()
-        WHERE status = 'complete'
-          AND created_at < :cutoff
-        RETURNING uuid
-    """, {"cutoff": cutoff})
-    
-    logger.info(f"Archived {len(result)} receipts older than {retention_days} days")
-    return len(result)
+if receipt["phase"] == "escalate":
+    if receipt["recipient_ai"] != receipt["escalation_to"]:
+        raise ValidationError("recipient_ai must equal escalation_to")
 ```
 
-### Cold Storage Export
+**Field Size Limits:**
+- `inputs`: < 64 KB
+- `metadata`: < 16 KB
+- `task_body`: < 100 KB
+- `outcome_text`: < 100 KB
 
-Export archived receipts to object storage:
+Enforced at API layer before database insertion.
 
-```python
-def export_to_cold_storage(batch_size: int = 1000):
-    """Export archived receipts to S3 for compliance."""
-    archived = db.query("""
-        SELECT * FROM receipts
-        WHERE status = 'archived'
-          AND exported_at IS NULL
-        LIMIT :batch_size
-    """, {"batch_size": batch_size})
-    
-    if not archived:
-        return 0
-    
-    # Export to S3
-    export_key = f"receipts/archive/{datetime.utcnow().date()}/{uuid4()}.jsonl"
-    s3.put_object(
-        Bucket="memorygate-compliance",
-        Key=export_key,
-        Body="\n".join(json.dumps(r) for r in archived)
-    )
-    
-    # Mark as exported
-    db.execute("""
-        UPDATE receipts
-        SET exported_at = NOW(),
-            export_location = :location
-        WHERE uuid IN :uuids
-    """, {"location": export_key, "uuids": [r.uuid for r in archived]})
-    
-    return len(archived)
+---
+
+## Error Handling
+
+### Validation Errors (400 Bad Request)
+
+```json
+{
+  "error": "validation_failed",
+  "details": [
+    {
+      "field": "completed_at",
+      "constraint": "required_for_phase_complete",
+      "message": "completed_at is required when phase=complete"
+    }
+  ]
+}
+```
+
+### Duplicate Receipt ID (409 Conflict)
+
+```json
+{
+  "error": "duplicate_receipt_id",
+  "receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+  "message": "Receipt with this ID already exists"
+}
+```
+
+### Unauthorized (401/403)
+
+```json
+{
+  "error": "unauthorized",
+  "message": "Invalid or missing authentication token"
+}
+```
+
+### Database Unavailable (503 Service Unavailable)
+
+```json
+{
+  "error": "database_unavailable",
+  "message": "Receipt store temporarily unavailable"
+}
 ```
 
 ---
 
-## Security Considerations
+## Security Model
 
-### Sensitive Data in Receipts
+### Authentication
 
-Receipts may contain sensitive information in metadata:
-- User identifiers
-- Task parameters
-- Artifact locations
+- All API endpoints require authentication
+- JWT or API key in `Authorization: Bearer <token>` header
+- `tenant_id` extracted from auth token, never from request body
 
-**Mitigation:**
-```python
-# Encrypt sensitive metadata before storage
-def encrypt_metadata(metadata: dict) -> str:
-    sensitive_keys = ["user_email", "api_key", "credentials"]
-    
-    for key in sensitive_keys:
-        if key in metadata:
-            metadata[key] = encrypt(metadata[key])
-    
-    return json.dumps(metadata)
+### Authorization
 
-# Decrypt when returning to authorized requestors
-def decrypt_metadata(encrypted: str) -> dict:
-    metadata = json.loads(encrypted)
-    
-    sensitive_keys = ["user_email", "api_key", "credentials"]
-    
-    for key in sensitive_keys:
-        if key in metadata:
-            metadata[key] = decrypt(metadata[key])
-    
-    return metadata
-```
+- Users can only access receipts in their `tenant_id`
+- All queries automatically filtered by authenticated `tenant_id`
+- Cross-tenant access prevented at database level
 
-### Access Control
+### Audit
 
-```python
-def check_receipt_ownership(receipt_id: str, ai_name: str):
-    """Verify AI owns this receipt before allowing access."""
-    receipt = db.query("""
-        SELECT recipient_ai FROM receipts
-        WHERE receipt_id = ?
-    """, receipt_id)
-    
-    if not receipt:
-        raise NotFoundError("Receipt not found")
-    
-    if receipt.recipient_ai != ai_name:
-        raise ForbiddenError("You do not own this receipt")
-```
+- All receipt POST operations logged
+- Immutable ledger provides complete audit trail
+- External audit API for compliance (future)
 
 ---
 
 ## Implementation Checklist
 
-- [ ] Database schema deployed (receipts table + indexes)
-- [ ] Internal API endpoint (/internal/receipt)
-- [ ] Service token system (generation, validation, rotation)
-- [ ] Automatic pairing logic
-- [ ] Enhanced memory_bootstrap() tool
-- [ ] New inbox management tools (get/read/archive)
-- [ ] External audit API (/external/receipt-chain, /external/work-in-flight)
-- [ ] Rate limiting (per source_system)
-- [ ] Monitoring & metrics (Prometheus)
-- [ ] Health check endpoint
-- [ ] Archiving cron job
-- [ ] Cold storage export
-- [ ] Security (encryption, access control)
-- [ ] Integration testing with AsyncGate
-- [ ] Load testing (1000+ receipts/sec)
-- [ ] Documentation for component integration
+**Phase 1: Core Receipt Store**
+- [x] PostgreSQL schema with CHECK constraints
+- [ ] POST /receipts endpoint with validation
+- [ ] GET /inbox endpoint
+- [ ] Authentication middleware (JWT/API key)
+- [ ] Schema validation integration
+- [ ] Error handling and logging
+
+**Phase 2: Query APIs**
+- [ ] GET /receipts/task/:task_id
+- [ ] GET /receipts/chain/:receipt_id
+- [ ] POST /bootstrap endpoint
+- [ ] Pagination support
+- [ ] Query performance optimization
+
+**Phase 3: Production Hardening**
+- [ ] Rate limiting
+- [ ] Database connection pooling
+- [ ] Metrics and monitoring
+- [ ] Backup and recovery procedures
+- [ ] External audit API
 
 ---
 
-*Implementation spec documented: 2026-01-04*  
-*Purpose: Define MemoryGate's role as receipt store*  
-*See receipt_protocol.md for universal receipt specification*
+## References
+
+- `/spec/receipt.schema.v1.json` - Receipt JSON Schema
+- `/spec/receipt.rules.md` - Protocol rules and semantics
+- `/spec/receipt.indexes.sql` - Database indexes
+- `/schema/receipts.sql` - PostgreSQL DDL
+
+---
+
+*Document version: 1.0*  
+*Technomancy Laboratories*  
+*LegiVellum Project*

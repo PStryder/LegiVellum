@@ -561,201 +561,229 @@ It makes intent **legible** — and legibility is what allows intelligence to sc
 
 At the center of the system is a simple rule: **nothing that matters is allowed to happen silently**.
 
-Every meaningful action produces a receipt. Not just execution. Not just failure. *Everything that advances state.*
+Every obligation lifecycle event produces a receipt. Not just completion. Not just failure. *Everything that changes accountability.*
 
-Creating a plan produces a receipt. Queuing work produces a receipt. Completing work produces a receipt. Failing work produces a receipt. Escalating a decision produces a receipt.
+Accepting work produces a receipt. Completing work produces a receipt. Escalating across boundaries produces a receipt.
 
-A receipt is not the work itself. It is **proof that something happened**, who owns the outcome, and where to look next if follow-up is required.
+A receipt is not the work itself. It is **proof of obligation**, who owns the outcome, and whether responsibility has been transferred.
 
-### The Four Essential Questions
+### The Three Phases
 
-Each receipt answers the same essential questions:
+Each receipt lifecycle has exactly three possible phases:
 
-1. **What just happened?** (event_type, summary)
-2. **Who is responsible for responding?** (recipient_ai)
-3. **Where is the artifact or outcome, if one exists?** (artifact_pointer, artifact_location)
-4. **Does anything need to happen next?** (requires_action, suggested_next_step)
+1. **accepted** — Creates an obligation for the issuer
+2. **complete** — Resolves the obligation (success/failure/canceled)
+3. **escalate** — Transfers responsibility across a boundary (ends issuer obligation)
 
-Receipts are deliberately small, durable, and explicit. They do not carry payloads. They carry **accountability**.
+**That's it.** No intermediate states. No progress updates. No "processing" phase.
 
-**Conceptual guidance:** Receipts are small, immutable metadata and are aggressively archived once paired and promoted. This keeps the active inbox lean and the system responsive.
+State is **derived** from receipt history, not stored in receipts themselves:
+- Task is **open** = `accepted` receipt exists, no `complete` receipt
+- Task is **resolved** = `complete` receipt exists
+- Task is **escalated** = `escalate` receipt exists
+
+### Escalation: LegiVellum's Only Soft Push
+
+Escalation is the **only mechanism** for cross-boundary coordination.
+
+When a component cannot complete work (wrong capabilities, trust boundary, policy limit), it emits an `escalate` receipt routed to `recipient_ai = escalation_to`.
+
+**Critical semantics:**
+- Escalation **ends the issuer's obligation** for that task instance
+- Escalation does NOT require its own completion receipt
+- The new owner continues work by issuing NEW `accepted` tasks linked via `parent_task_id` and `caused_by_receipt_id`
+
+This is **not delegation** (normal workflow breakdown). Escalation signals exceptional conditions: capability gaps, trust boundaries, policy violations.
 
 Because receipts persist, time stops being an enemy. Hours can pass. Sessions can reset. Systems can go idle.
 
 **Nothing important is lost, because nothing important happens without leaving a receipt behind.**
 
-### Receipt Types
+### Receipt Schema (Current)
 
-**Root Receipts** — Open obligations that need completion
-```
-Format: R.{timestamp}.{component}.{reference}
-Example: R.20260104_095023_450.kee.origin_abc
-Status: unpaired (until completion receipt arrives)
-```
-
-**Completion Receipts** — Signal that work is done
-```
-Format: Complete.{root_receipt_id}
-Example: Complete.R.20260104_095023_450.kee.origin_abc
-Status: automatically paired with root by MemoryGate
-```
-
-**Intermediate Receipts** — Track work-in-progress
-```
-Format: R.{timestamp}.{component}.{reference}
-Example: R.20260104_095024_120.delegate.plan_xyz
-Status: active (may or may not need completion)
-```
-
-### Receipt Schema
-
+**Example: Accepted Receipt**
 ```json
 {
-    // Dual identity
-    "uuid": "550e8400-...",  // DB primary key
-    "receipt_id": "R.20260104_095023_450.kee.origin_abc",  // Semantic ID
-    
-    // What happened?
-    "event_type": "task_queued",
-    "summary": "Code analysis task queued",
-    
-    // Who owns response?
-    "recipient_ai": "AgentName",
-    "source_system": "asyncgate",
-    
-    // Where is artifact?
-    "artifact_pointer": "task_abc123",
-    "artifact_location": "asyncgate_tasks",
-    
-    // What's next?
-    "requires_action": false,
-    "suggested_next_step": "Wait for completion receipt",
-    
-    // Chaining (provenance)
-    "caused_by_receipt_id": "R.20260104_095022_100.kee.intent_root",
-    
-    // Pairing (completion tracking)
-    "paired_with_uuid": null,
-    
-    // Status lifecycle
-    "status": "active",  // active|complete|archived
-    
-    // Deduplication
-    "dedupe_key": "asyncgate:task_queued:abc123:run_7",
-    
-    // Extensibility
-    "metadata": {
-        "task_id": "abc123",
-        "task_type": "code_analysis"
-    },
-    
-    // Timestamps
-    "created_at": "2026-01-04T09:50:23.450Z",
-    "delivered_at": "2026-01-04T09:50:23.500Z",
-    "read_at": null,
-    "archived_at": null
+  "schema_version": "1.0",
+  "tenant_id": "pstryder",
+  "receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+  "task_id": "T-123",
+  "parent_task_id": "NA",
+  "caused_by_receipt_id": "NA",
+  
+  "from_principal": "user.pstryder",
+  "for_principal": "agent.kee",
+  "source_system": "asyncgate",
+  "recipient_ai": "kee",
+  
+  "phase": "accepted",
+  "status": "NA",
+  
+  "task_type": "code.generate",
+  "task_summary": "Generate React component",
+  "task_body": "Create a login form component with validation",
+  
+  "expected_outcome_kind": "artifact_pointer",
+  "expected_artifact_mime": "application/javascript",
+  
+  // Accepted receipts have no outcome yet
+  "outcome_kind": "NA",
+  "outcome_text": "NA",
+  "artifact_pointer": "NA",
+  "artifact_location": "NA",
+  "artifact_mime": "NA",
+  
+  // Escalation fields NA for accepted
+  "escalation_class": "NA",
+  "escalation_to": "NA",
+  
+  "created_at": "2026-01-04T17:30:00Z",
+  "stored_at": "2026-01-04T17:30:01Z",
+  "started_at": null,
+  "completed_at": null,
+  
+  "metadata": {}
 }
 ```
 
-### Chaining Semantics
-
-Every receipt (except root receipts from external input) references what caused it:
-
-```
-task_received (user input)
-  ↓ caused_by
-plan_created (DeleGate decomposition)
-  ↓ caused_by
-task_queued (AsyncGate execution)
-  ↓ pairs_with
-task_complete (AsyncGate result)
-```
-
-This creates a complete chain from outcome to origin. Trace any result back through every decision and action that led to it.
-
-### Pairing Semantics
-
-Some event types form request/response pairs:
-
-**Root receipt:**
+**Example: Complete Receipt**
 ```json
 {
-    "receipt_id": "R.20260104_095023_450.kee.user_input_abc",
-    "event_type": "task_received",
-    "status": "active",  // Unpaired
-    "paired_with_uuid": null
+  "schema_version": "1.0",
+  "tenant_id": "pstryder",
+  "receipt_id": "01HTZQ9A7J6Z3F7C5N8V1K2M3P",
+  "task_id": "T-123",  // Same task_id as accepted
+  
+  "phase": "complete",
+  "status": "success",  // Or "failure", "canceled"
+  
+  "outcome_kind": "artifact_pointer",
+  "outcome_text": "Component generated successfully",
+  "artifact_pointer": "s3://bucket/components/LoginForm.jsx",
+  "artifact_location": "s3",
+  "artifact_mime": "application/javascript",
+  
+  "completed_at": "2026-01-04T17:35:22Z",
+  
+  // ... other required fields
 }
 ```
 
-**Completion receipt:**
+**Example: Escalate Receipt**
 ```json
 {
-    "receipt_id": "Complete.R.20260104_095023_450.kee.user_input_abc",
-    "event_type": "task_complete",
-    "status": "complete",
-    "paired_with_uuid": "550e8400-..."  // Points to root
+  "schema_version": "1.0",
+  "receipt_id": "01HTZQA2X9K4P8R7V3M2W5N6Q1",
+  "task_id": "T-456",
+  
+  "phase": "escalate",
+  "status": "NA",
+  
+  "escalation_class": "capability",
+  "escalation_reason": "Requires database access (not available)",
+  "escalation_to": "delegate",
+  "recipient_ai": "delegate",  // Must match escalation_to
+  
+  // Escalation ends issuer obligation - no completion required
+  "completed_at": null,
+  
+  // ... other required fields
 }
 ```
 
-MemoryGate automatically pairs receipts when completion arrives. No action required from components.
+**Key Schema Features:**
+- Timestamps use `null` for "not applicable" (not "NA" strings)
+- `tenant_id` is server-assigned from auth (prevents cross-tenant access)
+- `receipt_id` uses ULID format (sortable, globally unique)
+- Validation enforces phase-specific invariants
+- See `/spec/receipt.schema.v1.json` for complete spec
+
+### Provenance Chains
+
+Every receipt (except root tasks from external input) can reference what caused it:
+
+```
+User input (task_id: T-root)
+  → accepted by AsyncGate (caused_by_receipt_id: "NA")
+  
+DeleGate decomposes into subtasks
+  → accepted (task_id: T-001, parent_task_id: T-root)
+  → accepted (task_id: T-002, parent_task_id: T-root)
+  
+Worker completes T-001
+  → complete (task_id: T-001)
+  
+Worker escalates T-002 (capability gap)
+  → escalate (task_id: T-002, escalation_to: "delegate")
+  
+DeleGate accepts escalated work
+  → accepted (task_id: T-003, caused_by_receipt_id: "escalate-receipt-id")
+```
+
+**Provenance Fields:**
+- `parent_task_id` — Links delegated/spawned subtasks to parent
+- `caused_by_receipt_id` — Links receipts in escalation chains
+
+This creates a complete audit trail. Trace any result back through every decision and handoff that led to it.
+
+### Derived State (No Explicit Pairing)
+
+LegiVellum does NOT use "pairing fields" or mutable status flags.
+
+Task status is **derived** from receipt queries:
+- **Open** = `SELECT * FROM receipts WHERE tenant_id=? AND task_id=? AND phase='accepted' AND NOT EXISTS (SELECT 1 FROM receipts WHERE task_id=? AND phase='complete')`
+- **Resolved** = `SELECT * FROM receipts WHERE tenant_id=? AND task_id=? AND phase='complete'`
+- **Escalated** = `SELECT * FROM receipts WHERE tenant_id=? AND task_id=? AND phase='escalate'`
+
+Components reconstruct state on demand. MemoryGate does not maintain "task status" or "pairs" as stored fields.
 
 ### Inbox Ownership: One Receipt, One Owner
 
-**The Critical Invariant:** One receipt. One owner.
+**The Critical Invariant:** One receipt. One `recipient_ai`.
 
-When work completes, exactly one cognitive entity receives the receipt. That entity is now *unambiguously responsible* for deciding what happens next.
+When a receipt is stored, exactly one agent owns it (`recipient_ai` field). That agent is *unambiguously responsible* for deciding what happens next.
 
-If the result needs escalation, that escalation is explicit: the current owner creates a **new receipt** for the next tier. The original receipt is not shared, forwarded, or CC'd. Ownership does not blur as work moves upward.
+**For accepted receipts:** The agent must eventually:
+- Complete the task (`phase: complete`), OR
+- Escalate to another agent (`phase: escalate`)
 
-This single rule eliminates an entire class of failure modes:
-- No shared inboxes where multiple entities race or assume coverage
-- No "did you handle that?" uncertainty
-- No invisible handoffs where results quietly die in scrollback
-- No accidental duplication of effort
+**For escalated receipts:** The receiving agent (`recipient_ai == escalation_to`) must:
+- Issue new `accepted` tasks to continue the work
+- Link them via `parent_task_id` or `caused_by_receipt_id`
+
+This single rule eliminates failure modes:
+- No shared inboxes where multiple agents race
+- No "did you handle that?" uncertainty  
+- No invisible handoffs where work dies
+- No accidental duplication
 
 **Receipts form a chain of custody.** At any moment, you can answer:
-- *Who owns this?*
-- *What tier is responsible right now?*
-- *What decision is pending, if any?*
+- *Who owns this?* → `recipient_ai`
+- *Is it open?* → Query for `accepted` without `complete`
+- *What decision is pending?* → Read the task from inbox
 
-### Event Type Taxonomy
-
-**Boundary Crossing Events (Always Generate Receipts):**
-- `task_received` — External input arrives
-- `plan_created` — DeleGate produces plan
-- `task_queued` — Work posted to AsyncGate
-- `task_complete` — Work finished successfully
-- `task_failed` — Work failed
-- `escalation` — Decision passed up tier
-
-**Internal Events (No Receipts):**
-- Internal planning/thinking by DeleGate
-- Internal synthesis by Principal
-- Heartbeats, progress updates
-- Cache hits, memory recalls
-
-**Rule:** Only tier boundaries generate receipts.
-
-### Receipt Emission: Component Responsibilities
-
-**DeleGate emits:**
-- `plan_created` when plan generated
+### Component Responsibilities
 
 **AsyncGate emits:**
-- `task_queued` when work queued
-- `task_complete` when worker completes (includes pointer)
-- `task_failed` when worker fails or timeout
+- `accepted` — When worker accepts a task from lease
+- `complete` — When worker finishes (success/failure/canceled)
+- `escalate` — When task timeout/retry limit exceeded (→ DeleGate)
 
-**Principal/Agents emit:**
-- `task_received` when accepting external input
-- `task_complete` when finishing user tasks
-- `escalation` when passing decisions up (if in hierarchy)
+**DeleGate emits:**
+- `accepted` — When accepting escalated tasks
+- `accepted` — For each subtask in decomposition (`parent_task_id` set)
+- `escalate` — When decomposition exceeds scope (→ Principal)
+
+**Principal emits:**
+- `accepted` — When accepting user input
+- `complete` — When finishing user-facing tasks
+- `escalate` — When user decision required (if multi-tier)
 
 **MemoryGate:**
-- Receives all receipts (single-writer)
-- Validates schema
-- Auto-pairs completions
-- Returns in bootstrap
+- Receives all receipts (single-writer, validates, stores)
+- Provides inbox queries (active `accepted` receipts)
+- Provides bootstrap (config + inbox on session start)
+- **Does NOT** interpret receipts or coordinate work
 
 ---
 

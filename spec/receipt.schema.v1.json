@@ -4,7 +4,7 @@
   "title": "LegiVellum Receipt v1",
   "type": "object",
   "additionalProperties": false,
-  "description": "Receipt is the only coordination protocol. phase=accepted creates an obligation for the issuer; phase=complete resolves it; phase=escalate transfers/transforms responsibility (soft push to a target inbox) and ends the issuer obligation for that task instance. Escalation must target recipient_ai; the new owner continues the work by issuing new accepted tasks tied back via parent_task_id/caused_by_receipt_id.",
+  "description": "Receipt is the only coordination protocol. phase=accepted creates an obligation for the issuer; phase=complete resolves it; phase=escalate transfers/transforms responsibility (soft push to a target inbox) and ends the issuer obligation for that task instance. Escalation must target recipient_ai; the new owner continues the work by issuing new accepted tasks tied back via parent_task_id/caused_by_receipt_id. NOTE: The routing invariant (recipient_ai == escalation_to when phase=escalate) cannot be fully expressed in JSON Schema and must be enforced at the application level. See spec/receipt.rules.md Section 9 for validation requirements.",
   "required": [
     "schema_version",
     "tenant_id",
