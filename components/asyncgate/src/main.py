@@ -67,13 +67,26 @@ async def lifespan(app: FastAPI):
     
     # Start receipt retry worker
     retry_task = asyncio.create_task(retry_worker(interval_seconds=60))
-    logger.info("AsyncGate started with receipt retry worker")
+    logger.info("Receipt retry worker started")
+    
+    # Start lease expiry worker
+    lease_expiry_task = asyncio.create_task(lease_expiry_worker(interval_seconds=30))
+    logger.info("Lease expiry worker started")
+    
+    logger.info("AsyncGate started with background workers")
     
     yield
     
-    # Stop retry worker
+    # Stop workers
     stop_retry_worker()
     await retry_task
+    
+    # Cancel lease expiry worker
+    lease_expiry_task.cancel()
+    try:
+        await lease_expiry_task
+    except asyncio.CancelledError:
+        pass
     
     # Close database
     await close_database()
@@ -805,6 +818,106 @@ def _row_to_task(row) -> Task:
         data["inputs"] = json.loads(data["inputs"])
 
     return Task(**data)
+
+
+async def lease_expiry_worker(interval_seconds: int = 30):
+    """
+    Background worker that expires stale leases.
+    
+    Runs periodically to clean up leases that have expired.
+    """
+    logger.info(f"Lease expiry worker started (interval: {interval_seconds}s)")
+    
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            
+            # Use database session from pool
+            async with get_session() as session:
+                now = datetime.utcnow()
+                
+                # Find expired leases
+                query = text("""
+                    SELECT * FROM tasks
+                    WHERE status = 'leased'
+                      AND lease_expires_at < :now
+                """)
+                
+                result = await session.execute(query, {"now": now})
+                expired_rows = result.mappings().all()
+                
+                if not expired_rows:
+                    continue
+                
+                logger.info(f"Processing {len(expired_rows)} expired leases")
+                
+                for row in expired_rows:
+                    tenant_id = row["tenant_id"]
+                    task_id = row["task_id"]
+                    can_retry = row["attempt"] + 1 < row["max_attempts"]
+                    
+                    if can_retry:
+                        # Re-queue for retry
+                        update_sql = text("""
+                            UPDATE tasks SET
+                                status = 'queued',
+                                lease_id = NULL,
+                                worker_id = NULL,
+                                lease_expires_at = NULL,
+                                attempt = attempt + 1
+                            WHERE task_id = :task_id AND tenant_id = :tenant_id
+                        """)
+                        await session.execute(update_sql, {
+                            "task_id": task_id,
+                            "tenant_id": tenant_id,
+                        })
+                        
+                        logger.info(
+                            f"Lease expired, task re-queued for retry",
+                            extra={
+                                "task_id": task_id,
+                                "attempt": row["attempt"] + 1,
+                                "max_attempts": row["max_attempts"],
+                            }
+                        )
+                    else:
+                        # Max retries exceeded, mark as expired
+                        update_sql = text("""
+                            UPDATE tasks SET
+                                status = 'expired',
+                                completed_at = NOW()
+                            WHERE task_id = :task_id AND tenant_id = :tenant_id
+                        """)
+                        await session.execute(update_sql, {
+                            "task_id": task_id,
+                            "tenant_id": tenant_id,
+                        })
+                        
+                        # Emit escalation receipt
+                        try:
+                            await _emit_escalate_receipt(
+                                tenant_id=tenant_id,
+                                task_row=row,
+                                reason="Lease expired, max retries exceeded",
+                                escalation_class="policy",
+                            )
+                            logger.info(
+                                f"Lease expired, max retries exceeded, escalated",
+                                extra={"task_id": task_id}
+                            )
+                        except ReceiptEmissionError as e:
+                            logger.error(
+                                f"Failed to emit escalation receipt for expired task",
+                                extra={"task_id": task_id, "error": str(e)}
+                            )
+                
+                await session.commit()
+                
+        except asyncio.CancelledError:
+            logger.info("Lease expiry worker cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error in lease expiry worker: {e}")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ FastAPI service for intent-to-plan transformation and delegation coordination.
 """
 import os
 import json
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
@@ -33,6 +35,21 @@ from models import (
 )
 from planner import create_plan
 
+from receipt_emitter import (
+    emit_receipt_with_retry,
+    retry_worker,
+    stop_retry_worker,
+    get_retry_queue_size,
+    ReceiptEmissionError,
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Configuration
 MEMORYGATE_URL = os.environ.get("MEMORYGATE_URL", "http://memorygate:8001")
 ASYNCGATE_URL = os.environ.get("ASYNCGATE_URL", "http://asyncgate:8002")
@@ -42,8 +59,19 @@ ASYNCGATE_URL = os.environ.get("ASYNCGATE_URL", "http://asyncgate:8002")
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     init_database()
+    
+    # Start receipt retry worker
+    retry_task = asyncio.create_task(retry_worker(interval_seconds=60))
+    logger.info("DeleGate started with receipt retry worker")
+    
     yield
+    
+    # Stop retry worker
+    stop_retry_worker()
+    await retry_task
+    
     await close_database()
+    logger.info("DeleGate shutdown complete")
 
 
 app = FastAPI(
@@ -276,7 +304,14 @@ async def execute_plan(
                 receipt_ids.append(receipt_id)
                 steps_queued += 1
             except Exception as e:
-                print(f"Warning: Failed to queue step {step.step_id}: {e}")
+                logger.error(
+                    f"Failed to queue step",
+                    extra={
+                        "step_id": step.step_id,
+                        "plan_id": plan.plan_id,
+                        "error": str(e),
+                    }
+                )
 
     # Update plan status
     update_sql = text("""
@@ -435,7 +470,7 @@ async def _emit_plan_receipt(
     request: PlanRequest,
     created_at: datetime,
 ) -> str:
-    """Emit a plan_created receipt to MemoryGate"""
+    """Emit a plan_created receipt to MemoryGate with retry logic"""
     import ulid
 
     receipt_id = str(ulid.new())
@@ -481,19 +516,11 @@ async def _emit_plan_receipt(
         "metadata": {"plan_id": plan.plan_id},
     }
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MEMORYGATE_URL}/receipts",
-                json=receipt_data,
-                headers={"X-API-Key": f"dev-key-{tenant_id}"},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-    except Exception as e:
-        print(f"Warning: Failed to emit plan receipt to MemoryGate: {e}")
-
-    return receipt_id
+    return await emit_receipt_with_retry(
+        memorygate_url=MEMORYGATE_URL,
+        tenant_id=tenant_id,
+        receipt_data=receipt_data,
+    )
 
 
 async def _queue_task(
@@ -545,6 +572,21 @@ def _row_to_plan(row) -> Plan:
         notes=row["notes"],
         created_at=row["created_at"],
     )
+
+
+# =============================================================================
+# Admin Endpoints
+# =============================================================================
+
+@app.get("/admin/receipt-queue")
+async def get_receipt_queue_status(tenant_id: str = Depends(get_current_tenant)):
+    """
+    Admin endpoint to check receipt retry queue status.
+    """
+    return {
+        "queue_size": get_retry_queue_size(),
+        "status": "operational" if get_retry_queue_size() < 100 else "warning",
+    }
 
 
 if __name__ == "__main__":
