@@ -19,6 +19,23 @@ def load_json(path: Path) -> dict:
         return json.load(f)
 
 
+def validate_routing_invariant(receipt: dict) -> list[str]:
+    """Validate application-level invariants not expressible in JSON Schema."""
+    errors = []
+    
+    # Routing invariant: phase=escalate requires recipient_ai == escalation_to
+    if receipt.get("phase") == "escalate":
+        recipient_ai = receipt.get("recipient_ai")
+        escalation_to = receipt.get("escalation_to")
+        if recipient_ai != escalation_to:
+            errors.append(
+                f"Routing invariant violation: recipient_ai='{recipient_ai}' "
+                f"must equal escalation_to='{escalation_to}' when phase='escalate'"
+            )
+    
+    return errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("receipt", type=Path, help="Path to receipt JSON file")
@@ -28,17 +45,31 @@ def main() -> int:
     schema = load_json(args.schema)
     receipt = load_json(args.receipt)
 
+    # Schema validation
     v = Draft202012Validator(schema)
-    errors = sorted(v.iter_errors(receipt), key=lambda e: e.path)
+    schema_errors = sorted(v.iter_errors(receipt), key=lambda e: e.path)
+    
+    # Application-level validation
+    app_errors = validate_routing_invariant(receipt)
 
-    if not errors:
+    all_errors = []
+    
+    if schema_errors:
+        for err in schema_errors:
+            path = ".".join([str(p) for p in err.path]) or "<root>"
+            all_errors.append(f"Schema: {path}: {err.message}")
+    
+    if app_errors:
+        for err in app_errors:
+            all_errors.append(f"Invariant: {err}")
+
+    if not all_errors:
         print("OK: receipt is valid")
         return 0
 
-    print(f"INVALID: {len(errors)} error(s)")
-    for err in errors:
-        path = ".".join([str(p) for p in err.path]) or "<root>"
-        print(f"- {path}: {err.message}")
+    print(f"INVALID: {len(all_errors)} error(s)")
+    for err in all_errors:
+        print(f"- {err}")
     return 2
 
 

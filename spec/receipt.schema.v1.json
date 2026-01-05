@@ -334,6 +334,11 @@
           "completed_at": {
             "type": "null"
           },
+          "task_summary": {
+            "not": {
+              "const": "TBD"
+            }
+          },
           "outcome_kind": {
             "const": "NA"
           },
@@ -421,6 +426,11 @@
               "scope",
               "other"
             ]
+          },
+          "escalation_reason": {
+            "not": {
+              "const": "TBD"
+            }
           }
         },
         "required": [
@@ -462,6 +472,23 @@
             "not": {
               "const": "NA"
             }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "retry_requested": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "attempt": {
+            "minimum": 1,
+            "description": "When retry_requested is true, attempt must be >= 1"
           }
         }
       }
