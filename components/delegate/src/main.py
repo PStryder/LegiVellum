@@ -19,6 +19,7 @@ from sqlalchemy import text
 
 from legivellum.database import init_database, close_database, get_session_dependency
 from legivellum.auth import get_current_tenant
+from legivellum.observability import setup_metrics, track_gauge, observability_enabled
 
 from models import (
     Plan,
@@ -80,6 +81,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Setup observability (no-op if ENABLE_METRICS != true)
+setup_metrics(app, service_name="delegate")
 
 # CORS middleware
 app.add_middleware(
@@ -587,6 +591,57 @@ async def get_receipt_queue_status(tenant_id: str = Depends(get_current_tenant))
         "queue_size": get_retry_queue_size(),
         "status": "operational" if get_retry_queue_size() < 100 else "warning",
     }
+
+
+# =============================================================================
+# Observability - Custom Metrics
+# =============================================================================
+
+# Register custom gauges (no-op if metrics disabled)
+if observability_enabled():
+    import asyncio
+    from legivellum.database import get_session
+    
+    async def get_plans_executing():
+        """Get count of plans currently executing"""
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM plans WHERE status = 'executing'")
+                )
+                return result.scalar() or 0
+        except Exception:
+            return 0
+    
+    async def get_total_plans():
+        """Get total number of plans created"""
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM plans")
+                )
+                return result.scalar() or 0
+        except Exception:
+            return 0
+    
+    # Register gauges
+    track_gauge(
+        "delegate_plans_executing",
+        "Number of plans currently executing",
+        lambda: asyncio.run(get_plans_executing())
+    )
+    
+    track_gauge(
+        "delegate_total_plans",
+        "Total plans created",
+        lambda: asyncio.run(get_total_plans())
+    )
+    
+    track_gauge(
+        "delegate_retry_queue_depth",
+        "Number of failed receipts queued for retry",
+        get_retry_queue_size
+    )
 
 
 if __name__ == "__main__":

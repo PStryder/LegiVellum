@@ -29,6 +29,7 @@ from legivellum.models import (
 from legivellum.validation import validate_receipt_create, ValidationError
 from legivellum.database import init_database, close_database, get_session_dependency
 from legivellum.auth import get_current_tenant
+from legivellum.observability import setup_metrics, track_gauge, track_counter, observability_enabled
 
 
 @asynccontextmanager
@@ -47,6 +48,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Setup observability (no-op if ENABLE_METRICS != true)
+setup_metrics(app, service_name="memorygate")
 
 # CORS middleware
 app.add_middleware(
@@ -455,6 +459,54 @@ def _row_to_receipt(row) -> Receipt:
     data.pop("uuid", None)
 
     return Receipt(**data)
+
+
+# =============================================================================
+# Observability - Custom Metrics
+# =============================================================================
+
+# Register custom gauges (no-op if metrics disabled)
+if observability_enabled():
+    import asyncio
+    from legivellum.database import get_session
+    
+    async def get_total_receipts():
+        """Get total number of receipts stored"""
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM receipts")
+                )
+                return result.scalar() or 0
+        except Exception:
+            return 0
+    
+    async def get_active_inbox_count():
+        """Get count of active inbox items (accepted, not archived)"""
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    text("""
+                        SELECT COUNT(*) FROM receipts 
+                        WHERE phase = 'accepted' AND archived_at IS NULL
+                    """)
+                )
+                return result.scalar() or 0
+        except Exception:
+            return 0
+    
+    # Register gauges
+    track_gauge(
+        "memorygate_total_receipts",
+        "Total receipts stored in ledger",
+        lambda: asyncio.run(get_total_receipts())
+    )
+    
+    track_gauge(
+        "memorygate_active_inbox",
+        "Active inbox items (accepted, not archived)",
+        lambda: asyncio.run(get_active_inbox_count())
+    )
 
 
 if __name__ == "__main__":

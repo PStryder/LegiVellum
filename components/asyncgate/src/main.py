@@ -21,6 +21,7 @@ from sqlalchemy import text
 from legivellum.database import init_database, close_database, get_session_dependency
 from legivellum.auth import get_current_tenant
 from legivellum.models import Phase, Status, OutcomeKind, EscalationClass
+from legivellum.observability import setup_metrics, track_gauge, observability_enabled
 
 from models import (
     TaskCreate,
@@ -99,6 +100,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Setup observability (no-op if ENABLE_METRICS != true)
+setup_metrics(app, service_name="asyncgate")
 
 # CORS middleware
 app.add_middleware(
@@ -918,6 +922,39 @@ async def lease_expiry_worker(interval_seconds: int = 30):
             break
         except Exception as e:
             logger.error(f"Error in lease expiry worker: {e}")
+
+
+# =============================================================================
+# Observability - Custom Metrics
+# =============================================================================
+
+# Register custom gauges (no-op if metrics disabled)
+if observability_enabled():
+    from legivellum.database import get_session
+    
+    async def get_queued_task_count():
+        """Get current count of queued tasks"""
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM tasks WHERE status = 'queued'")
+                )
+                return result.scalar() or 0
+        except Exception:
+            return 0
+    
+    # Register gauges that will be updated on /metrics requests
+    track_gauge(
+        "asyncgate_queue_depth",
+        "Number of tasks currently queued",
+        lambda: asyncio.run(get_queued_task_count())
+    )
+    
+    track_gauge(
+        "asyncgate_retry_queue_depth", 
+        "Number of failed receipts queued for retry",
+        get_retry_queue_size
+    )
 
 
 if __name__ == "__main__":
