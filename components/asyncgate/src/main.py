@@ -5,6 +5,8 @@ FastAPI service for task queue management and worker coordination.
 """
 import os
 import json
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Optional
@@ -38,6 +40,21 @@ from models import (
     generate_lease_id,
 )
 
+from receipt_emitter import (
+    emit_receipt_with_retry,
+    retry_worker,
+    stop_retry_worker,
+    get_retry_queue_size,
+    ReceiptEmissionError,
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Configuration
 LEASE_DURATION_SECONDS = int(os.environ.get("LEASE_DURATION_SECONDS", 900))  # 15 min default
 MEMORYGATE_URL = os.environ.get("MEMORYGATE_URL", "http://memorygate:8001")
@@ -47,8 +64,20 @@ MEMORYGATE_URL = os.environ.get("MEMORYGATE_URL", "http://memorygate:8001")
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     init_database()
+    
+    # Start receipt retry worker
+    retry_task = asyncio.create_task(retry_worker(interval_seconds=60))
+    logger.info("AsyncGate started with receipt retry worker")
+    
     yield
+    
+    # Stop retry worker
+    stop_retry_worker()
+    await retry_task
+    
+    # Close database
     await close_database()
+    logger.info("AsyncGate shutdown complete")
 
 
 app = FastAPI(
@@ -151,13 +180,26 @@ async def create_task(
     await session.commit()
 
     # Emit accepted receipt to MemoryGate
-    receipt_id = await _emit_receipt(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        phase="accepted",
-        task_create=task_create,
-        created_at=created_at,
-    )
+    try:
+        receipt_id = await _emit_receipt(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            phase="accepted",
+            task_create=task_create,
+            created_at=created_at,
+        )
+    except ReceiptEmissionError as e:
+        logger.error(f"Failed to emit accepted receipt for task {task_id}: {e}")
+        # Task created but receipt failed - escalate via queue
+        # Task will still be visible in queue but audit trail has gap
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "receipt_emission_failed",
+                "message": "Task created but receipt emission failed. Queued for retry.",
+                "task_id": task_id,
+            }
+        )
 
     return TaskResponse(
         task_id=task_id,
@@ -498,7 +540,7 @@ async def fail_task(
 # Background Tasks
 # =============================================================================
 
-@app.post("/admin/expire-leases")
+@app.get("/admin/expire-leases")
 async def expire_leases(
     tenant_id: str = Depends(get_current_tenant),
     session: AsyncSession = Depends(get_session_dependency),
@@ -551,16 +593,30 @@ async def expire_leases(
             })
 
             # Emit escalation
-            await _emit_escalate_receipt(
-                tenant_id=tenant_id,
-                task_row=row,
-                reason="Lease expired, max retries exceeded",
-                escalation_class="policy",
-            )
+            try:
+                await _emit_escalate_receipt(
+                    tenant_id=tenant_id,
+                    task_row=row,
+                    reason="Lease expired, max retries exceeded",
+                    escalation_class="policy",
+                )
+            except ReceiptEmissionError as e:
+                logger.error(f"Failed to emit escalation receipt: {e}")
 
     await session.commit()
 
     return {"expired": len(expired_rows)}
+
+
+@app.get("/admin/receipt-queue")
+async def get_receipt_queue_status(tenant_id: str = Depends(get_current_tenant)):
+    """
+    Admin endpoint to check receipt retry queue status.
+    """
+    return {
+        "queue_size": get_retry_queue_size(),
+        "status": "operational" if get_retry_queue_size() < 100 else "warning",
+    }
 
 
 # =============================================================================
@@ -574,7 +630,7 @@ async def _emit_receipt(
     task_create: TaskCreate,
     created_at: datetime,
 ) -> str:
-    """Emit an accepted receipt to MemoryGate"""
+    """Emit an accepted receipt to MemoryGate with retry logic"""
     import ulid
 
     receipt_id = str(ulid.new())
@@ -616,20 +672,11 @@ async def _emit_receipt(
         "metadata": {},
     }
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MEMORYGATE_URL}/receipts",
-                json=receipt_data,
-                headers={"X-API-Key": f"dev-key-{tenant_id}"},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-    except Exception as e:
-        # Log but don't fail - receipt emission shouldn't block task creation
-        print(f"Warning: Failed to emit receipt to MemoryGate: {e}")
-
-    return receipt_id
+    return await emit_receipt_with_retry(
+        memorygate_url=MEMORYGATE_URL,
+        tenant_id=tenant_id,
+        receipt_data=receipt_data,
+    )
 
 
 async def _emit_complete_receipt(
@@ -638,7 +685,7 @@ async def _emit_complete_receipt(
     request: TaskCompleteRequest,
     completed_at: datetime,
 ) -> str:
-    """Emit a complete receipt to MemoryGate"""
+    """Emit a complete receipt to MemoryGate with retry logic"""
     import ulid
 
     receipt_id = str(ulid.new())
@@ -683,19 +730,11 @@ async def _emit_complete_receipt(
         "metadata": {},
     }
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MEMORYGATE_URL}/receipts",
-                json=receipt_data,
-                headers={"X-API-Key": f"dev-key-{tenant_id}"},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-    except Exception as e:
-        print(f"Warning: Failed to emit complete receipt to MemoryGate: {e}")
-
-    return receipt_id
+    return await emit_receipt_with_retry(
+        memorygate_url=MEMORYGATE_URL,
+        tenant_id=tenant_id,
+        receipt_data=receipt_data,
+    )
 
 
 async def _emit_escalate_receipt(
@@ -704,7 +743,7 @@ async def _emit_escalate_receipt(
     reason: str,
     escalation_class: str,
 ) -> str:
-    """Emit an escalate receipt to MemoryGate"""
+    """Emit an escalate receipt to MemoryGate with retry logic"""
     import ulid
 
     receipt_id = str(ulid.new())
@@ -751,19 +790,11 @@ async def _emit_escalate_receipt(
         "metadata": {},
     }
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MEMORYGATE_URL}/receipts",
-                json=receipt_data,
-                headers={"X-API-Key": f"dev-key-{tenant_id}"},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-    except Exception as e:
-        print(f"Warning: Failed to emit escalate receipt to MemoryGate: {e}")
-
-    return receipt_id
+    return await emit_receipt_with_retry(
+        memorygate_url=MEMORYGATE_URL,
+        tenant_id=tenant_id,
+        receipt_data=receipt_data,
+    )
 
 
 def _row_to_task(row) -> Task:

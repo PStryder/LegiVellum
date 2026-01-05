@@ -289,21 +289,35 @@ async def bootstrap_session(
 @app.get("/receipts/task/{task_id}", response_model=TaskTimelineResponse)
 async def get_task_timeline(
     task_id: str,
-    sort: str = Query(default="asc", regex="^(asc|desc)$"),
+    sort: str = Query(default="asc", pattern="^(asc|desc)$"),
     tenant_id: str = Depends(get_current_tenant),
     session: AsyncSession = Depends(get_session_dependency),
 ):
     """
     Get all receipts for a task (lifecycle timeline).
     """
-    order = "ASC" if sort == "asc" else "DESC"
-
-    query = text(f"""
-        SELECT * FROM receipts
-        WHERE tenant_id = :tenant_id
-          AND task_id = :task_id
-        ORDER BY stored_at {order}
-    """)
+    # Validate sort parameter (defense in depth)
+    if sort not in ("asc", "desc"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_sort", "message": "sort must be 'asc' or 'desc'"}
+        )
+    
+    # Safe: sort is validated and parameterized
+    if sort == "asc":
+        query = text("""
+            SELECT * FROM receipts
+            WHERE tenant_id = :tenant_id
+              AND task_id = :task_id
+            ORDER BY stored_at ASC
+        """)
+    else:
+        query = text("""
+            SELECT * FROM receipts
+            WHERE tenant_id = :tenant_id
+              AND task_id = :task_id
+            ORDER BY stored_at DESC
+        """)
 
     result = await session.execute(query, {
         "tenant_id": tenant_id,

@@ -3,8 +3,18 @@ LegiVellum Receipt Validation
 
 Additional validation utilities beyond Pydantic model validation.
 """
+import json
+import os
+from pathlib import Path
 from typing import Any
 from .models import Receipt, ReceiptCreate, Phase
+
+try:
+    import jsonschema
+    JSONSCHEMA_AVAILABLE = True
+except ImportError:
+    JSONSCHEMA_AVAILABLE = False
+    print("Warning: jsonschema not installed. JSON Schema validation disabled.")
 
 
 class ValidationError(Exception):
@@ -92,7 +102,56 @@ def validate_receipt(data: dict[str, Any]) -> list[ValidationError]:
 
     # Routing invariant
     errors.extend(validate_routing_invariant(data))
+    
+    # JSON Schema validation (if available)
+    if JSONSCHEMA_AVAILABLE:
+        errors.extend(validate_json_schema(data))
 
+    return errors
+
+
+def validate_json_schema(data: dict[str, Any]) -> list[ValidationError]:
+    """
+    Validate against canonical JSON Schema file.
+    Returns list of validation errors.
+    """
+    if not JSONSCHEMA_AVAILABLE:
+        return []
+    
+    errors = []
+    
+    try:
+        # Find schema file (relative to this module)
+        module_dir = Path(__file__).parent
+        schema_path = module_dir.parent.parent / "spec" / "receipt.schema.v1.json"
+        
+        # Try alternate path if not found
+        if not schema_path.exists():
+            schema_path = Path.cwd() / "spec" / "receipt.schema.v1.json"
+        
+        if not schema_path.exists():
+            # Schema file not found - warn but don't fail
+            return []
+        
+        with open(schema_path) as f:
+            schema = json.load(f)
+        
+        # Validate against schema
+        jsonschema.validate(data, schema)
+        
+    except jsonschema.ValidationError as e:
+        errors.append(ValidationError(
+            message=f"JSON Schema validation failed: {e.message}",
+            field=".".join(str(p) for p in e.path) if e.path else "unknown",
+            constraint="json_schema"
+        ))
+    except FileNotFoundError:
+        # Schema file not found - warn but don't fail validation
+        pass
+    except Exception as e:
+        # Other errors - log but don't fail
+        print(f"Warning: JSON Schema validation error: {e}")
+    
     return errors
 
 
