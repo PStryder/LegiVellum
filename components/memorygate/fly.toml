@@ -1,0 +1,43 @@
+# MemoryGate Fly.io Configuration
+# The Permanent Record - Receipt ledger and semantic memory
+
+app = "legivellum-memorygate"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8001"
+  PYTHONUNBUFFERED = "1"
+  # DATABASE_URL set via fly secrets
+
+[http_service]
+  internal_port = 8001
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
+# Secrets to set via `fly secrets set`:
+# DATABASE_URL=postgresql+asyncpg://...
+# LEGIVELLUM_API_KEY=your-api-key
+# LEGIVELLUM_TENANT_ID=your-tenant-id

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nImplement LegiVellum trilogy core services\n\nBuild the three core components from spec:\n- MemoryGate: Receipt ledger, bootstrap API, inbox queries\n- AsyncGate: Task queue, lease protocol, worker coordination  \n- DeleGate: Plan creation, intent-to-plan transformation\n\nKey additions:\n- Shared library (legivellum): Receipt models, validation, auth\n- FastAPI services for each component with PostgreSQL backend\n- Dockerfiles for containerization\n- docker-compose.yml for local development\n- fly.toml configs for Fly.io deployment\n- Database schemas (receipts, tasks, plans, workers)\n- DEPLOYMENT.md with setup instructions\n\nAll components implement the receipt protocol per spec:\n- Accepted/Complete/Escalate phases\n- Multi-tenant isolation via tenant_id\n- Receipt emission to MemoryGate for coordination\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nAdd MCP servers to all trilogy components\n\nEach component now supports both REST API and MCP interfaces:\n- MemoryGate MCP: memory_bootstrap, memory_store_receipt, memory_get_inbox, etc.\n- AsyncGate MCP: queue_task, lease_task, complete_task, fail_task, heartbeat\n- DeleGate MCP: create_delegation_plan, execute_plan, register_worker, etc.\n\nChanges:\n- Add mcp_server.py to each component\n- Add mcp>=1.0.0 to requirements\n- Update Dockerfiles to support RUN_MODE=rest|mcp\n- Add mcp-config.example.json for Claude Desktop\n- Update DEPLOYMENT.md with MCP configuration guide\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")"
+    ]
+  }
+}

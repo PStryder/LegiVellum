@@ -1,0 +1,45 @@
+# DeleGate Fly.io Configuration
+# The Pure Planner - Intent-to-plan transformation
+
+app = "legivellum-delegate"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8003"
+  PYTHONUNBUFFERED = "1"
+  # MEMORYGATE_URL, ASYNCGATE_URL, DATABASE_URL set via fly secrets
+
+[http_service]
+  internal_port = 8003
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
+# Secrets to set via `fly secrets set`:
+# DATABASE_URL=postgresql+asyncpg://...
+# MEMORYGATE_URL=https://legivellum-memorygate.fly.dev
+# ASYNCGATE_URL=https://legivellum-asyncgate.fly.dev
+# LEGIVELLUM_API_KEY=your-api-key
+# LEGIVELLUM_TENANT_ID=your-tenant-id

@@ -1,0 +1,130 @@
+# LegiVellum Docker Compose
+# Local development environment for the trilogy components
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # PostgreSQL Database
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: legivellum-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: legivellum
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # =============================================================================
+  # MemoryGate - The Permanent Record
+  # =============================================================================
+  memorygate:
+    build:
+      context: .
+      dockerfile: components/memorygate/Dockerfile
+    container_name: legivellum-memorygate
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/legivellum
+      PORT: "8001"
+      RELOAD: "true"
+      CORS_ORIGINS: "*"
+      MEMORYGATE_URL: http://memorygate:8001
+      ASYNCGATE_URL: http://asyncgate:8002
+      DELEGATE_URL: http://delegate:8003
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./shared:/app/shared:ro
+      - ./components/memorygate/src:/app/src:ro
+
+  # =============================================================================
+  # AsyncGate - The Execution Coordinator
+  # =============================================================================
+  asyncgate:
+    build:
+      context: .
+      dockerfile: components/asyncgate/Dockerfile
+    container_name: legivellum-asyncgate
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/legivellum
+      PORT: "8002"
+      RELOAD: "true"
+      CORS_ORIGINS: "*"
+      MEMORYGATE_URL: http://memorygate:8001
+      LEASE_DURATION_SECONDS: "900"
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      memorygate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8002/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./shared:/app/shared:ro
+      - ./components/asyncgate/src:/app/src:ro
+
+  # =============================================================================
+  # DeleGate - The Pure Planner
+  # =============================================================================
+  delegate:
+    build:
+      context: .
+      dockerfile: components/delegate/Dockerfile
+    container_name: legivellum-delegate
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/legivellum
+      PORT: "8003"
+      RELOAD: "true"
+      CORS_ORIGINS: "*"
+      MEMORYGATE_URL: http://memorygate:8001
+      ASYNCGATE_URL: http://asyncgate:8002
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      memorygate:
+        condition: service_healthy
+      asyncgate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8003/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./shared:/app/shared:ro
+      - ./components/delegate/src:/app/src:ro
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: legivellum-network
