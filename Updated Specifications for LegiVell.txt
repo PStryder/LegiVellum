@@ -1,0 +1,137 @@
+Updated Specifications for LegiVellum Primitives
+
+This document reconciles each standalone repository in the LegiVellum ecosystem with the unified LegiVellum specification (v1.1). It should be used by maintainers of the MemoryGate, AsyncGate and DeleGate codebases as the authoritative description of their responsibilities, invariants and boundaries. The goal is to ensure that even when each component is built independently, they all adhere to the same contract so that they compose into a coherent, safe system.
+
+✨ Core Principles Across All Primitives
+
+Receipts are the only coordination protocol. Every component that accepts responsibility for an obligation must emit a receipt. Receipts are immutable evidence of custody, not “work products.”
+
+Obligations can only be minted by Principals or DeleGates. CogniGates may reason and advise, but they cannot create new tasks or plans. MemoryGate and AsyncGate are passive stores and never mint obligations.
+
+Plans are work products and first‑class primitives. Only DeleGates may produce Plans. A Plan is a structured intent that can be executed by other components; it is stored as an artifact (via DepotGate) and referenced by receipts.
+
+Passivity and Immutability. All state changes are expressed through receipts or artifacts. The underlying stores (MemoryGate, AsyncGate, DepotGate) are passive; they never initiate work, orchestrate tasks or mutate stored records.
+
+Boundaries enforce safety. MetaGate performs bootstrap and topology management, but cannot create arbitrary work; CogniGate thinks but cannot act; AsyncGate holds tasks but never schedules; MemoryGate stores receipts but does not decide; DeleGate plans but does not execute; Principals own the agentic identity.
+
+The following sections describe how each repository should align with these principles.
+
+📦 MemoryGate (Authoritative Receipt Store)
+
+Role: MemoryGate is the authoritative ledger of the LegiVellum system. It stores every receipt emitted by Principals, DeleGates, CogniGates, AsyncGate, MetaGate and DepotGate. It is the source of truth for what has happened and when.
+
+Responsibilities
+
+Accept and validate receipts. MemoryGate accepts receipts via a POST /receipts endpoint. It validates that the receipt conforms to the schema and that the submitting principal has the right to emit it. A receipt must include:
+
+receipt_id (ULID), task_id and phase (accepted, complete, or escalate).
+
+emitter (the logical identity responsible for the event) and principal_ai (the ultimate owning AI).
+
+References to any artifacts (e.g., plan IDs stored in DepotGate).
+
+Store receipts immutably. Stored receipts are never updated in place. Derived state (inboxes, open obligations) is computed via queries, not by mutating existing receipts.
+
+Provide durable queries. MemoryGate exposes read‑only endpoints to retrieve the inbox for a principal (GET /inbox), to fetch all receipts associated with a task (GET /receipts/task/:task_id), and to fetch the chain of receipts anchored at a given receipt (GET /receipts/chain/:receipt_id). Query responses are sorted by timestamp but order is derived, not stored.
+
+Emit bootstrap receipts. While MemoryGate is usually passive, MetaGate may emit receipts into MemoryGate during bootstrap (e.g., when registering a new component). These bootstrap receipts follow the same schema and validation rules as any other receipt.
+
+Multi‑tenant from the start. Every receipt includes a tenant_id. Queries are namespaced per tenant and per principal. MemoryGate must enforce tenant isolation.
+
+What MemoryGate Does Not Do
+
+It is not a single writer. The legacy v1.0 spec described MemoryGate as the “single writer.” In v1.1 this is relaxed: multiple authorised components (e.g., MetaGate during bootstrap) may emit receipts, but MemoryGate remains the sole store of truth and enforces validation and ordering.
+
+It does not mint obligations. MemoryGate never creates tasks or plans. It stores evidence of obligations created by Principals and DeleGates.
+
+It does not perform coordination or scheduling. MemoryGate provides no APIs to run or schedule tasks. It simply accepts, stores and serves receipts.
+
+Design Principles
+
+Passivity: MemoryGate is a passive ledger. It never initiates work; it only records that work happened or responsibility moved.
+
+Immutability: Once written, receipts are immutable. Corrections and retries are expressed by emitting new receipts.
+
+Derived State: Inbox and open obligation lists are views over receipts, not stored tables. Clients derive these on demand via queries.
+
+Multi‑writer Validation: While multiple components may emit receipts, MemoryGate validates that each receipt is well‑formed, properly signed and belongs to the correct tenant.
+
+⏳ AsyncGate (Asynchronous Boundary / Work Parking)
+
+Role: AsyncGate provides a durable handoff point for obligations that are not immediately executed. It decouples the requester’s control flow from the eventual processing of a task. Unlike a job scheduler or orchestrator, it does not decide when or by whom a task will be executed.
+
+Responsibilities
+
+Accept tasks. Clients (Principals or DeleGates) enqueue tasks into AsyncGate via POST /tasks. A task includes at minimum task_id, principal_ai, tenant_id, payload_pointer (e.g., to a plan step or input stored in DepotGate) and an optional not_before timestamp.
+
+Hold tasks until claimed. AsyncGate stores tasks in a durable queue until a worker process claims them by acquiring a lease. Only one active lease may exist per task at any time. When a lease expires without completion, the task becomes available again.
+
+Provide leases and completions. Workers call POST /lease to claim a task. This returns a lease_id and an expiry. Workers complete a task via POST /complete (with a lease_id), which archives the task and emits a complete receipt to MemoryGate.
+
+Support introspection. AsyncGate exposes read‑only introspection endpoints (InterView) such as GET /health and GET /queue/depth for monitoring. These never mutate state or emit receipts.
+
+What AsyncGate Does Not Do
+
+It does not schedule or prioritise. AsyncGate is not an orchestrator or scheduler. It holds tasks until claimed; it does not order tasks by priority, predict execution times or balance across workers.
+
+It does not mint obligations. AsyncGate will never create tasks on its own. Tasks can only be enqueued by an authorised Principal or DeleGate.
+
+It does not store artifacts. Task inputs and outputs are stored in DepotGate; AsyncGate only stores pointers.
+
+Design Principles
+
+Time Decoupling: AsyncGate allows callers to enqueue work and continue without blocking, but it does not coordinate the execution itself.
+
+Single Lease Invariant: At most one active lease may exist per task. If a lease expires or a worker fails, the task becomes available again.
+
+Immutability of Receipts: Completion of a task is recorded in MemoryGate via a complete receipt. AsyncGate does not directly update any MemoryGate records.
+
+Read‑Only Introspection: Observational APIs never alter state.
+
+🗺 DeleGate (Planning Authority)
+
+Role: DeleGate is the planning primitive in LegiVellum. It translates high‑level intent from a Principal into a structured Plan, which enumerates the tasks needed to fulfil that intent. DeleGate is authoritative because it is the only component (besides a Principal) that can mint obligations.
+
+Responsibilities
+
+Accept obligations and emit receipts. When a Principal requests planning, DeleGate emits an accepted receipt to MemoryGate to record that it has assumed responsibility for creating a plan.
+
+Produce plans. DeleGate generates a Plan — a structured, immutable description of future work. A Plan is both a first‑class primitive (with a defined schema) and a work product (stored as an artifact in DepotGate). Plans must include:
+
+plan_id (ULID), principal_ai, tenant_id and a pointer to the receipt that caused the plan (caused_by_receipt_id).
+
+An ordered list of steps, each referencing a task or sub‑plan, with explicit dependencies (depends_on) and permitted escalation rules.
+
+Mint obligations. DeleGate is authorised to create new tasks (enqueued into AsyncGate) and to create new Plans. Each obligation minted results in an accepted receipt in MemoryGate, tying the obligation to the principal and the originating plan.
+
+Emit completion or escalation receipts. Once a Plan is fully executed, DeleGate emits a complete receipt. If a Plan cannot be completed with available permissions or information, DeleGate emits an escalate receipt to signal a new obligation for an authorised human or system.
+
+What DeleGate Does Not Do
+
+It does not execute tasks. DeleGate only plans; it never runs the work itself. Execution is handled by AsyncGate workers or other components.
+
+It does not store receipts or artifacts directly. Plans are stored in DepotGate; receipts are recorded in MemoryGate. DeleGate merely references them.
+
+It does not bootstrap the system. DeleGate assumes that MetaGate has already registered all components and that MemoryGate is available.
+
+Design Principles
+
+Authority to Mint: Only Principals and DeleGates can mint new obligations. DeleGate must enforce that it never creates tasks or plans on behalf of the wrong principal or tenant.
+
+Determinism When Practical: Given the same intent, input state and configuration, DeleGate should produce the same Plan. However, this may be relaxed when the underlying reasoning model is stochastic.
+
+Auditability: Every plan step and resulting task has a clear provenance: a Plan ID, a causing receipt and a principal. This traceability is essential for accountability.
+
+Separation of Concerns: DeleGate does not think (that is CogniGate’s role), store (DepotGate), schedule (AsyncGate) or supervise (MetaGate). It strictly transforms intent into a structured plan.
+
+📌 Notes on Other Primitives
+
+CogniGate: Not yet implemented as a separate repository, CogniGate provides bounded cognition and analysis. It can accept obligations (and must emit receipts) but cannot mint new obligations. It reads from MemoryGate and DepotGate to synthesise knowledge, generate recommendations or propose plan drafts to DeleGate.
+
+MetaGate: Also not a standalone repo in this set, MetaGate manages bootstrap, topology and lifecycle. It emits receipts during system bring‑up (e.g., registering components). MetaGate cannot create arbitrary work outside bootstrap.
+
+DepotGate: Handles artifact storage and lifecycle. Plans, task inputs and outputs are stored in DepotGate and referenced by receipts. AsyncGate and DeleGate only ever store pointers to DepotGate artifacts.
+
+InterView: A class of read‑only endpoints across all primitives. Introspection APIs (e.g., GET /health) are part of InterView. They never mutate state or emit receipts.
+
+By following this unified specification, each codebase can evolve independently while remaining coherent with the LegiVellum system as a whole. When updating or extending any primitive, first consult this document to ensure that new features respect the boundaries and invariants described above.
