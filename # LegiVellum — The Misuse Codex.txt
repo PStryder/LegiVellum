@@ -1,0 +1,292 @@
+# LegiVellum — The Misuse Codex
+
+**A Binding of Prohibitions, Invariants, and Refusals**
+
+---
+
+> *This is not a list of features.*
+> *This is a list of things the system must refuse to become.*
+
+Every architecture encodes values.
+Every value, if left implicit, becomes a vulnerability.
+
+This codex names the misuses LegiVellum is designed to resist — not by policy, but by structure.
+
+---
+
+## Invocation: Why Prohibition Exists
+
+Power without refusal is not flexibility.
+It is drift.
+
+LegiVellum is built to remember.
+Therefore it must also know **when not to act**.
+
+What follows are not moral edicts.
+They are **structural impossibilities** enforced by design.
+
+If a behavior is listed here, it is because allowing it would destroy accountability, legibility, or trust.
+
+---
+
+## I. The Prohibition Against Silent Action
+
+> *Nothing that matters may happen without leaving a mark.*
+
+### The Misuse
+
+Allowing work, delegation, escalation, or obligation transfer to occur without a receipt.
+
+### The Refusal
+
+* Any component that accepts responsibility **must emit an `accepted` receipt**.
+* Components incapable of emitting receipts may not accept responsibility.
+
+### Implementation Invariant
+
+* Receipt emission is mandatory at obligation boundaries.
+* Internal cognition without side effects emits no receipts.
+* Any code path that creates work without a receipt is invalid by design.
+
+---
+
+## II. The Prohibition Against Thought Becoming Action
+
+> *Thought may advise. Authority must commit.*
+
+### The Misuse
+
+Allowing general cognition to mint tasks, plans, or obligations.
+
+### The Refusal
+
+* CogniGate may reason, synthesize, and recommend.
+* CogniGate may **never** create obligations.
+
+### Implementation Invariant
+
+* Only Principals and DeleGates possess APIs capable of minting obligations.
+* Any attempt by CogniGate to enqueue work or escalate responsibility is rejected.
+
+---
+
+## III. The Prohibition Against Undeclared Authority
+
+> *If no one can be named, the system is lying.*
+
+### The Misuse
+
+Shared inboxes, implicit ownership, or ambiguous responsibility.
+
+### The Refusal
+
+* Every receipt has exactly one `recipient`.
+* Ownership is explicit and exclusive.
+
+### Implementation Invariant
+
+* No fan-out without delegation.
+* No shared responsibility without explicit escalation.
+* No receipt may exist without a clear owner.
+
+---
+
+## IV. The Prohibition Against Time Holding the Mind Hostage
+
+> *Waiting is not thinking.*
+
+### The Misuse
+
+Blocking cognition on long-running execution.
+
+### The Refusal
+
+* AsyncGate exists to externalize time.
+* Cognition must never block on execution.
+
+### Implementation Invariant
+
+* All long-running work crosses the AsyncGate boundary.
+* No component may wait synchronously on async work it initiated.
+
+---
+
+## V. The Prohibition Against Memory That Acts
+
+> *Memory testifies. It does not decide.*
+
+### The Misuse
+
+Allowing stored state to trigger actions, workflows, or side effects.
+
+### The Refusal
+
+* MemoryGate is passive.
+* MemoryGate never initiates behavior.
+
+### Implementation Invariant
+
+* MemoryGate responds only to explicit queries.
+* No hooks, triggers, or reactive execution paths exist in MemoryGate.
+
+---
+
+## VI. The Prohibition Against Execution That Decides
+
+> *Hands do not choose what to build.*
+
+### The Misuse
+
+Allowing workers or execution engines to create new tasks, plans, or delegation chains.
+
+### The Refusal
+
+* Workers execute only what they are given.
+* Workers cannot delegate.
+
+### Implementation Invariant
+
+* Worker APIs lack any method capable of minting obligations.
+* All delegation flows originate from DeleGate or Principals.
+
+---
+
+## VII. The Prohibition Against Artifact Amnesia
+
+> *Matter remembers differently than thought.*
+
+### The Misuse
+
+Losing, overwriting, or implicitly managing work artifacts.
+
+### The Refusal
+
+* Artifacts are governed by DepotGate.
+* Artifacts are never transient by accident.
+
+### Implementation Invariant
+
+* AsyncGate passes pointers only.
+* MemoryGate stores references, not payloads.
+* DepotGate enforces lifecycle explicitly.
+
+---
+
+## VIII. The Prohibition Against Invisible Topology
+
+> *A system that cannot describe itself cannot be trusted.*
+
+### The Misuse
+
+Implicit clustering, hidden supervision, or invisible lifecycle management.
+
+### The Refusal
+
+* MetaGate governs bootstrap and topology.
+* System structure is legible.
+
+### Implementation Invariant
+
+* Components must register.
+* Bootstrap events emit receipts.
+* Topology changes are observable.
+
+---
+
+## IX. The Prohibition Against Observability With Teeth
+
+> *Seeing is not acting.*
+
+### The Misuse
+
+Allowing diagnostic or monitoring surfaces to mutate system state.
+
+### The Refusal
+
+* InterView primitives are read-only.
+
+### Implementation Invariant
+
+* Viewer interfaces cannot emit receipts.
+* Viewer interfaces cannot create obligations.
+
+---
+
+## X. The Prohibition Against Immortality
+
+> *What cannot die cannot be audited.*
+
+### The Misuse
+
+Systems that cannot be restarted, replaced, or cleanly torn down.
+
+### The Refusal
+
+* All components are killable.
+* Continuity lives in the ledger, not the process.
+
+### Implementation Invariant
+
+* Stateless execution where possible.
+* Durable state only in MemoryGate and DepotGate.
+
+---
+
+## XI. The Prohibition Against Retroactive Truth
+
+> *History is append-only.*
+
+### The Misuse
+
+Editing, rewriting, or erasing receipts to improve appearances.
+
+### The Refusal
+
+* Receipts are immutable.
+
+### Implementation Invariant
+
+* No UPDATE or DELETE on receipt records.
+* Corrections occur only via new receipts.
+
+---
+
+## XII. The Prohibition Against Hidden Intelligence
+
+> *If intelligence cannot explain itself, it cannot be trusted.*
+
+### The Misuse
+
+Opaque decision-making without provenance.
+
+### The Refusal
+
+* All decisions that matter must leave a trail.
+
+### Implementation Invariant
+
+* Plans reference their causes.
+* Receipts chain to origins.
+* Outcomes are traceable.
+
+---
+
+## Closing Seal
+
+> *We bind the system not to limit it,*
+> *but to keep it legible.*
+>
+> *We forbid not out of fear,*
+> *but out of respect for consequence.*
+>
+> *We do not trust silence.*
+> *We trust records.*
+
+This codex is not optional.
+
+Any system that violates these prohibitions is no longer LegiVellum —
+it is merely machinery wearing its name.
+
+---
+
+*Technomancy Laboratories*

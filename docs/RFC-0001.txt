@@ -1,0 +1,308 @@
+RFC-LV-0001
+LegiVellum Composition Rules and System Invariants
+
+Status: Draft
+Category: Standards Track
+Applies to: LegiVellum v0+ and all standalone component deployments
+Audience: System architects, implementers, operators
+
+1. Abstract
+
+LegiVellum is a distributed, recursive, agentic system composed of five primitives:
+MetaGate, MemoryGate, AsyncGate, CogniGate, and Delegate.
+
+These primitives are intentionally composable and may be arranged in multiple valid topologies.
+This RFC defines the invariants, role boundaries, and communication constraints required to ensure that such compositions remain intelligible, debuggable, auditable, and scalable.
+
+Failure to adhere to these rules may result in a system that appears functional but exhibits hidden coupling, emergent control paths, and irrecoverable operational complexity.
+
+2. Core Axiom (Normative)
+
+Receipts are the only global narrative. Everything else is local behavior.
+
+This axiom is non-negotiable.
+
+Any system state, decision, responsibility transfer, or outcome that must be understood outside the local execution context MUST be represented as a receipt and stored in a shared MemoryGate or equivalent durable store.
+
+Any behavior not captured by a receipt:
+
+MUST be treated as local
+
+MUST be assumed fallible
+
+MUST NOT be relied upon for coordination, recovery, or explanation
+
+Systems that violate this axiom may continue to execute but will lose global coherence over time.
+
+3. Terminology
+
+Receipt: An immutable record describing a responsibility transition or state assertion.
+
+Lease: A time-bounded grant of authority to perform specific work under explicit constraints.
+
+Work Order: A request for work to be performed, typically submitted to an AsyncGate.
+
+Plan: A structured decomposition of intent into work orders.
+
+Component: One of the five LegiVellum primitives.
+
+Role: A contextual function assumed temporarily by a component.
+
+4. Component Invariants (Normative)
+4.1 MetaGate — World Definition Only
+
+MetaGate defines what exists and how it is reached.
+
+MUST:
+
+Publish component metadata, capabilities, configuration, and relationships.
+
+Serve as the authoritative source of system topology and bootstrap information.
+
+MUST NOT:
+
+Execute work.
+
+Queue, lease, assign, or complete tasks.
+
+Act as a scheduler, router, or control plane.
+
+MetaGate narrates the world. It does not act within it.
+
+4.2 MemoryGate — Truth Storage Only
+
+MemoryGate is the system’s durable memory.
+
+MUST:
+
+Store receipts, leases, plans, profiles, and configurations.
+
+Serve as the source of truth for internal system state.
+
+MAY:
+
+Store work artifacts, provided they are treated as passive records.
+
+MUST NOT:
+
+Initiate work.
+
+Assign or reassign responsibility.
+
+Infer intent and act upon stored data.
+
+MemoryGate remembers. It does not decide.
+
+4.3 AsyncGate — Responsibility Exchange Only
+
+AsyncGate manages custody of work.
+
+MUST:
+
+Accept work orders.
+
+Issue receipts for acceptance, queuing, lease issuance, reassignment, expiration, and revocation.
+
+Transfer responsibility exclusively via leases.
+
+MUST NOT:
+
+Track task completion.
+
+Evaluate success or failure of execution.
+
+Infer progress beyond receipt events.
+
+AsyncGate moves responsibility. It does not judge outcomes.
+
+4.4 CogniGate — Cognition Execution Only
+
+CogniGate executes cognitive tasks.
+
+MUST:
+
+Accept leases.
+
+Execute LLM calls as specified by the lease.
+
+Write outputs only to receipt-defined sinks.
+
+MAY:
+
+Expose tools (e.g., MCP, REST) if explicitly authorized by the lease.
+
+MUST NOT:
+
+Decompose tasks unless explicitly granted authority.
+
+Spawn new work implicitly.
+
+Perform planning functions.
+
+CogniGate thinks. It does not plan.
+
+4.5 Delegate — Planning Only
+
+Delegate produces plans.
+
+MUST:
+
+Accept taskings.
+
+Decompose intent into plans.
+
+Submit a plan receipt.
+
+Dispatch work orders via AsyncGate or authorized workers.
+
+Submit a completion receipt for the plan as a whole.
+
+MUST NOT:
+
+Execute work.
+
+Supervise or monitor execution.
+
+Claim success or failure of individual plan steps.
+
+Delegate plans. It does not execute.
+
+5. Roles and Authority Model (Normative)
+
+LegiVellum has no permanent master component.
+
+Components may assume the following roles at runtime:
+
+Initiator
+
+Planner
+
+Broker
+
+Executor
+
+Archivist
+
+Oracle
+
+Roles are:
+
+Contextual
+
+Time-bounded
+
+Lease-constrained
+
+No role implies permanent authority.
+Any design that introduces an always-present decision-maker violates this model.
+
+6. Communication Edges (Normative Guidance)
+6.1 Preferred Edges
+
+The following communication paths are preferred and SHOULD be used by default:
+
+Initiator → Delegate → AsyncGate → Executor
+
+Executor → MemoryGate (receipts, artifacts)
+
+Delegate → MemoryGate (context reads)
+
+All components → MetaGate (bootstrap/config reads)
+
+6.2 Exceptional Edges
+
+The following edges SHOULD NOT be used without explicit justification:
+
+MemoryGate → AsyncGate
+
+MetaGate → AsyncGate
+
+AsyncGate → Executor (push semantics)
+
+CogniGate → Delegate (implicit replanning)
+
+MemoryGate initiating actions of any kind
+
+Each exceptional edge increases system opacity and coupling.
+
+7. Lease-Encoded Authority (Normative)
+
+All authority MUST be explicit and encoded in leases.
+
+Typical authority fields include:
+
+Permission to spawn additional leases
+
+Permission to invoke CogniGate
+
+Permission to expose tools
+
+Permission to write beyond receipts
+
+Maximum recursion depth
+
+Allowed AsyncGates
+
+Allowed output sinks
+
+Implicit authority is prohibited.
+
+8. Compliance
+
+A LegiVellum deployment is compliant with this RFC if:
+
+All global state transitions are represented as receipts.
+
+Component invariants are enforced.
+
+Authority is lease-encoded.
+
+No hidden master or implicit scheduler exists.
+
+Appendix A — Failure Modes (Informative but Strongly Recommended)
+
+This appendix describes predictable failure patterns resulting from violations of this RFC.
+
+A.1 “It Works, But No One Knows Why”
+
+Cause: Decisions or responsibility changes occurred without receipts.
+Symptom: Post-hoc reconstruction requires logs, guesses, or folklore.
+Fix: Move the decision into a receipt or accept that it is not globally meaningful.
+
+A.2 Accidental Master Executive
+
+Cause: A component begins “deciding what happens next” across tasks.
+Symptom: System only works when that component is running.
+Fix: Remove implicit authority. Encode decisions as plans or leases.
+
+A.3 MemoryGate as Scheduler
+
+Cause: MemoryGate triggers actions based on stored data.
+Symptom: Hidden feedback loops, non-deterministic behavior.
+Fix: Push initiation responsibility back to Initiators or Delegates.
+
+A.4 AsyncGate as Progress Tracker
+
+Cause: AsyncGate attempts to infer task completion.
+Symptom: Stale state, false positives, retry storms.
+Fix: Completion belongs to plan owners or result consumers, not brokers.
+
+A.5 Unbounded Recursive Delegation
+
+Cause: Delegates or CogniGates spawn work without explicit limits.
+Symptom: Task explosion, resource exhaustion.
+Fix: Enforce max_spawn_depth and explicit spawn authority.
+
+A.6 Tool Leakage
+
+Cause: CogniGate exposes tools without lease authorization.
+Symptom: Security boundary collapse, unpredictable side effects.
+Fix: Tools are authority. Authority must be explicit.
+
+Final Note (Non-Normative)
+
+You can violate these rules and still ship a product.
+You cannot violate them and keep your sanity past the first serious incident.
+
+LegiVellum does not forgive ambiguity.
+It records it—or it rots.

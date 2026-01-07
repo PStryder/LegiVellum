@@ -1,0 +1,369 @@
+Good. Then this one gets written like a **rejection letter from the universe**.
+Clear, explicit, unapologetic.
+
+What follows is a **normative companion RFC**.
+Anything listed here is not “unsupported for now.”
+It is **structurally incompatible** with LegiVellum.
+
+---
+
+# RFC-LV-000X
+
+## Anti-Patterns We Refuse to Support
+
+*(Some Things Are Unnatural)*
+
+**Status:** Draft
+**Category:** Informational (Hard Prohibitions)
+**Applies to:** All LegiVellum-based systems and derivatives
+**Audience:** Architects, implementers, optimizers, “clever people”
+
+---
+
+## 1. Purpose
+
+LegiVellum is intentionally permissive in composition, but **not morally neutral** in structure.
+
+This document enumerates architectural anti-patterns that:
+
+* violate the Core Axiom
+* collapse responsibility boundaries
+* introduce hidden control
+* or create systems that cannot be reasoned about post hoc
+
+These patterns are **explicitly refused**.
+
+If your use case requires one of them, LegiVellum is the wrong system.
+Use something else. You will be happier.
+
+---
+
+## 2. The Hidden Master Anti-Pattern
+
+### Description
+
+A component (or model) that:
+
+* always knows “what’s going on”
+* decides what happens next
+* routes work implicitly
+* or must be running for the system to function
+
+Often disguised as:
+
+* “coordinator”
+* “orchestrator”
+* “controller”
+* “manager”
+* “brain”
+
+### Why It Is Unnatural
+
+It violates:
+
+* lease-encoded authority
+* role ephemerality
+* receipt-based narrative
+
+It recentralizes power while pretending not to.
+
+### Observable Symptoms
+
+* System halts if one component goes down
+* Logic exists nowhere except “in the head” of a process
+* Post-incident analysis devolves into storytelling
+
+### Status
+
+**Refused.**
+LegiVellum does not have kings.
+
+---
+
+## 3. Implicit Progress Tracking
+
+### Description
+
+Inferring task completion, success, or failure by:
+
+* timeouts
+* heuristics
+* polling state
+* “it probably finished by now”
+
+Instead of explicit receipts.
+
+### Why It Is Unnatural
+
+Progress is a **claim**, not a feeling.
+
+If it matters, it must be recorded.
+
+### Observable Symptoms
+
+* Phantom retries
+* Duplicate work
+* Silent partial failures
+* Operators asking “did it actually run?”
+
+### Status
+
+**Refused.**
+AsyncGate does not guess. Neither should you.
+
+---
+
+## 4. MemoryGate as an Actor
+
+### Description
+
+Using MemoryGate to:
+
+* trigger workflows
+* initiate tasks
+* schedule follow-ups
+* “notice something and act”
+
+### Why It Is Unnatural
+
+Memory is passive by design.
+
+Turning memory into agency creates:
+
+* invisible feedback loops
+* non-deterministic behavior
+* impossible debugging
+
+### Observable Symptoms
+
+* Actions with no clear initiator
+* “it happened because it was stored”
+* system behavior changing after data replays
+
+### Status
+
+**Refused.**
+MemoryGate remembers. It does not awaken.
+
+---
+
+## 5. Push-Based Execution
+
+### Description
+
+AsyncGate (or equivalent) pushing work directly to workers instead of workers pulling via lease polling.
+
+Often justified as:
+
+* “efficiency”
+* “lower latency”
+* “simpler mental model”
+
+### Why It Is Unnatural
+
+Push collapses:
+
+* capability discovery
+* backpressure
+* autonomy
+* failure isolation
+
+It turns workers into puppets.
+
+### Observable Symptoms
+
+* Cascading failures
+* Overloaded executors
+* Tight coupling between broker and worker
+
+### Status
+
+**Refused.**
+Responsibility is offered, not shoved.
+
+---
+
+## 6. Implicit Replanning by Executors
+
+### Description
+
+CogniGate or workers that:
+
+* decide to break tasks into subtasks
+* create new work orders
+* reroute execution
+
+…without explicit lease authority.
+
+### Why It Is Unnatural
+
+Execution and planning are different kinds of cognition.
+
+Blurring them creates:
+
+* runaway recursion
+* invisible scope creep
+* loss of accountability
+
+### Observable Symptoms
+
+* Task explosion
+* “helpful” behavior that cannot be traced
+* costs growing without explanation
+
+### Status
+
+**Refused.**
+Planning requires consent.
+
+---
+
+## 7. Authority by Configuration Side Effects
+
+### Description
+
+Granting power because:
+
+* a component can reach an endpoint
+* a tool happens to be exposed
+* credentials exist in the environment
+
+Instead of explicit lease permissions.
+
+### Why It Is Unnatural
+
+Reachability is not authorization.
+
+This pattern creates **ambient authority**, which always leaks.
+
+### Observable Symptoms
+
+* Security reviews that end in silence
+* “it shouldn’t have been able to do that”
+* emergency revocations after the fact
+
+### Status
+
+**Refused.**
+Authority must be declared, scoped, and time-bounded.
+
+---
+
+## 8. Global Shared Mutable State
+
+### Description
+
+Using shared variables, caches, or in-memory coordination as:
+
+* truth
+* synchronization
+* control flow
+
+Especially across components.
+
+### Why It Is Unnatural
+
+LegiVellum is distributed by assumption.
+
+Shared mutable state is a lie the system will eventually punish.
+
+### Observable Symptoms
+
+* Race conditions
+* Heisenbugs
+* State that “fixes itself” when restarted
+
+### Status
+
+**Refused.**
+If it matters, write a receipt.
+
+---
+
+## 9. Silent Success
+
+### Description
+
+Work that:
+
+* “just runs”
+* produces output
+* but emits no receipt asserting completion or outcome
+
+### Why It Is Unnatural
+
+Silence is indistinguishable from absence.
+
+In LegiVellum, silence means **nothing happened**.
+
+### Observable Symptoms
+
+* Missing artifacts
+* Duplicate execution
+* Operators asking “was this already done?”
+
+### Status
+
+**Refused.**
+Success must speak for itself.
+
+---
+
+## 10. Topology-as-Fate
+
+### Description
+
+Hard-coding assumptions like:
+
+* “there will only ever be one AsyncGate”
+* “this Delegate is special”
+* “this component must always exist”
+
+### Why It Is Unnatural
+
+LegiVellum is designed to fracture, recurse, and federate.
+
+Topology is a deployment choice, not a law of nature.
+
+### Observable Symptoms
+
+* Inability to scale or partition
+* “we’d have to rewrite everything to do that”
+* brittle upgrades
+
+### Status
+
+**Refused.**
+Topology is contextual. Design accordingly.
+
+---
+
+## 11. Final Prohibition
+
+If your design relies on:
+
+* implicit knowledge
+* invisible authority
+* emergent control
+* or “we’ll just remember how it works”
+
+Then you are not building a LegiVellum system.
+
+You are building a haunted machine.
+
+---
+
+## Closing Note (Deliberately Unfriendly)
+
+These anti-patterns are common because they feel *convenient*.
+
+They are also how systems become:
+
+* unmaintainable
+* untrustworthy
+* and eventually abandoned
+
+LegiVellum refuses them not out of ideology,
+but out of experience.
+
+Some things are just unnatural.

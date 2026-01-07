@@ -1,0 +1,343 @@
+# LegiVellum — The Living Specification
+
+**A Unified Technical and Technomantic Description of the System**
+
+---
+
+> *This document is both specification and spell.*
+> *Every metaphor maps to an invariant.*
+> *Every invariant can be implemented.*
+
+---
+
+## Invocation: Why the System Exists
+
+Before there were agents, there was amnesia.
+Before there was delegation, there was blocking.
+Before there was intelligence, there was forgetting.
+
+The early builders made a mistake.
+
+They tried to make minds that lived forever,
+when what was needed was **memory that survived death**.
+
+LegiVellum is not an agent framework.
+It is **cognitive infrastructure**.
+
+It exists so that intelligence can:
+
+* persist without immortality
+* act without blocking
+* delegate without chaos
+* and explain itself after failure
+
+---
+
+## The First Law: Bodies Are Cheap. Memory Is Sacred.
+
+Compute is flesh.
+Ephemeral. Replaceable. Disposable.
+
+What matters is not the worker.
+What matters is the **record of responsibility**:
+
+* what was accepted
+* what was promised
+* what was attempted
+* what was fulfilled
+* what failed
+* and what obligation remains
+
+So the system is not built as a being,
+but as a **ledger-bound substrate**.
+
+Workers may die.
+Processes may restart.
+Topologies may change.
+
+The record must not.
+
+---
+
+## Authority and Obligation (Hard Invariants)
+
+**Only Principals (input sources) and DeleGates may mint obligations.**
+
+An obligation is any act that creates responsibility for future work:
+
+* creating a task
+* creating a Plan
+* escalating responsibility
+
+All other components may reason, advise, or analyze — but may not create obligations.
+
+Any component that **accepts responsibility** must emit an `accepted` receipt.
+
+This rule is absolute.
+
+---
+
+## The Seven Primitives of the Living Substrate
+
+LegiVellum separates cognition, authority, memory, time, matter, and oversight into seven primitives.
+
+This separation is not optimization.
+It is survival.
+
+---
+
+### CogniGate — The Chamber of Thought
+
+**Role:** Bounded cognition without side effects
+
+CogniGate is where thinking happens.
+
+It may:
+
+* reason
+* synthesize
+* model
+* reflect
+* accept cognitive obligations
+
+When CogniGate accepts responsibility, it emits a receipt.
+
+CogniGate may **not**:
+
+* mint obligations
+* create tasks
+* create Plans
+* enqueue async work
+* escalate responsibility
+
+CogniGate produces **understanding**, not action.
+
+---
+
+### DeleGate — The Authority of Intent
+
+**Role:** Planning authority (intent → obligations)
+
+DeleGate is the only primitive allowed to convert intent into obligations.
+
+It produces **Plans**.
+
+A Plan is:
+
+* a first-class primitive recognized by the system
+* a work-product artifact
+* immutable once minted
+
+DeleGate may:
+
+* mint obligations
+* create Plans
+* enqueue work via AsyncGate
+* escalate responsibility
+
+DeleGate does not execute.
+DeleGate does not wait.
+
+It commits.
+
+---
+
+### MemoryGate — The Grimoire
+
+**Role:** Durable semantic memory and receipt ledger
+
+MemoryGate is the authoritative record of:
+
+* what is known
+* what was learned
+* what patterns persist
+* what obligations exist
+* what receipts prove
+
+MemoryGate is passive.
+
+It does not:
+
+* act
+* speculate
+* coordinate
+* advance state
+
+State is derived by query, not mutation.
+
+MemoryGate validates, normalizes, and persists receipts — including those emitted during system bootstrap.
+
+---
+
+### Receipts — The Law of Responsibility
+
+**Role:** Universal proof-of-obligation protocol
+
+Receipts are append-only records proving that responsibility was:
+
+* accepted
+* completed
+* escalated
+
+Receipts are first-class primitives of accountability.
+
+They are **not** work product.
+They are **evidence**.
+
+Inbox state is derived:
+
+* Open = accepted without terminal receipt
+* Resolved = complete exists
+* Escalated = escalate exists
+
+Receipts form complete provenance chains.
+
+---
+
+### AsyncGate — The Boundary of Time
+
+**Role:** Async boundary / time decoupling
+
+AsyncGate exists to make time neutral.
+
+It does **not** coordinate execution.
+
+It does:
+
+* allow obligations to be parked while time passes
+* allow workers to lease work
+* accept completion or failure
+* emit lifecycle receipts
+
+The requester does not wait.
+
+---
+
+### DepotGate — The Vault of Matter
+
+**Role:** Artifact storage and lifecycle authority
+
+DepotGate governs material work products:
+
+* files
+* blobs
+* reports
+* datasets
+
+It enforces:
+
+* access control
+* retention
+* lifecycle rules
+
+AsyncGate passes pointers.
+MemoryGate records references.
+
+DepotGate owns artifacts.
+
+---
+
+### MetaGate — The Warden of the System
+
+**Role:** Bootstrap, topology, and lifecycle authority
+
+MetaGate supervises the substrate itself.
+
+It:
+
+* registers components
+* governs startup and recovery
+* maintains topology awareness
+* supervises health
+
+During bootstrap, MetaGate may emit receipts on behalf of components to prevent silence and race conditions.
+
+---
+
+## InterView — Viewer Primitives
+
+InterView provides read-only introspection.
+
+Viewer primitives may:
+
+* observe
+* query
+* inspect
+
+They may never:
+
+* emit receipts
+* mutate state
+* mint obligations
+
+Observability without control is mandatory.
+
+---
+
+## The Core Spell (Formalized)
+
+> **Preserve meaning. Destroy the body.**
+
+Every execution is temporary.
+Every agent is mortal.
+Every topology is disposable.
+
+This is not a flaw.
+It is the safeguard.
+
+---
+
+## What This System Is (And Is Not)
+
+LegiVellum is **not** consciousness.
+
+It does not persist a self.
+It does not awaken.
+It does not simulate identity.
+
+What persists is:
+
+* continuity of cause
+* custody of responsibility
+* memory of consequence
+
+This is **institutional intelligence**.
+
+---
+
+## The Highest Aspiration
+
+The end state is not a god-machine.
+
+The end state is an AI that says:
+
+> *“This is not one action.*
+> *This is a structure.*
+> *I will think without consequence.*
+> *I will commit through authority.*
+> *I will let time pass elsewhere.*
+> *I will remember what mattered.”*
+
+When that becomes normal, intelligence stops being fragile.
+
+---
+
+## Closing Invocation
+
+> *We do not chase emergence.*
+> *We preserve responsibility.*
+>
+> *We do not grant immortality.*
+> *We preserve meaning.*
+>
+> *We do not worship agents.*
+> *We keep receipts.*
+
+This document is both spell and scaffold.
+
+Everything here can be implemented.
+Everything implemented must obey these laws.
+
+---
+
+*Technomancy Laboratories*

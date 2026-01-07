@@ -1,0 +1,245 @@
+Good. Then we write it like a **warning label etched into steel**—technical first, but with enough gravity that no one skims it and lives happily afterward.
+
+Below is a **single-page specification draft** you can drop directly into the LegiVellum docs.
+Tone: sober, sharp, slightly ceremonial.
+Purpose: collapse combinatorics, prevent accidental gods.
+
+---
+
+# LegiVellum Composition Rules
+
+**(Read This First. Seriously.)**
+
+---
+
+## AXIOM (NON-NEGOTIABLE)
+
+> **Receipts are the only global narrative. Everything else is local behavior.**
+
+If you violate this axiom, the system may still *run*.
+It may even *work*.
+
+But it will not be intelligible, debuggable, auditable, or sane.
+
+LegiVellum does not preserve truth by controlling execution.
+It preserves truth by recording *responsibility transfer*.
+
+Anything that is not expressed as a receipt is, by definition:
+
+* local
+* provisional
+* forgettable
+* and not authoritative
+
+Design accordingly.
+
+---
+
+## 1. Purpose of This Document
+
+LegiVellum is intentionally composable.
+The same five primitives can be wired together in dozens of valid topologies.
+
+This document **does not** define a single “correct” architecture.
+
+It defines:
+
+* invariants each primitive must obey
+* allowed and discouraged communication edges
+* role boundaries that prevent emergent chaos
+* the minimum structure required to keep a distributed, recursive system legible
+
+If you follow these rules, the system can scale, fracture, recurse, and federate.
+
+If you ignore them, you will accidentally invent:
+
+* hidden masters
+* ghost state
+* implicit control flow
+* and post-hoc rationalizations you cannot prove
+
+---
+
+## 2. Component Vows (Invariants)
+
+Each primitive makes a vow.
+Breaking a vow creates ambiguity that no amount of logging will fix.
+
+### MetaGate — *World Truth Only*
+
+* Publishes system metadata: components, roles, locations, capabilities, relationships, configuration.
+* Defines “what exists” and “how to reach it.”
+* **MUST NOT** execute work.
+* **MUST NOT** queue, lease, assign, or complete tasks.
+* **MUST NOT** act as a router or scheduler.
+
+MetaGate narrates the world. It does not act in it.
+
+---
+
+### MemoryGate — *Truth Store Only*
+
+* Source of truth for internal system artifacts:
+
+  * receipts
+  * leases
+  * plans
+  * profiles
+  * configurations
+* May store work products, but only as artifacts—not as pipeline state.
+* **MUST NOT** initiate work.
+* **MUST NOT** assign or reassign responsibility.
+* **MUST NOT** infer intent from stored data and act on it.
+
+MemoryGate remembers. It does not decide.
+
+---
+
+### AsyncGate — *Responsibility Exchange Only*
+
+* Accepts work orders.
+* Issues receipts for:
+
+  * acceptance
+  * queuing
+  * lease issuance
+  * reassignment
+  * expiration
+  * revocation
+* Transfers responsibility via leases.
+* **DOES NOT** track task completion.
+* **DOES NOT** judge success or failure of execution.
+
+AsyncGate moves responsibility. It does not evaluate outcomes.
+
+---
+
+### CogniGate — *Cognition Execution Only*
+
+* Accepts a lease.
+* Executes one or more LLM calls as specified.
+* May expose tools (MCP, REST) **only if authorized by the lease**.
+* Writes outputs strictly to sinks defined by the receipt/lease.
+* **MUST NOT** decompose tasks unless explicitly granted spawn authority.
+* **MUST NOT** silently create new work.
+
+CogniGate thinks. It does not plan.
+
+---
+
+### Delegate — *Planning Only*
+
+* Accepts a tasking.
+* Produces a plan (a set of intended actions).
+* Submits a plan receipt.
+* Dispatches work via AsyncGate or directly to workers.
+* Submits a *single* completion receipt for the plan itself.
+* **DOES NOT** own execution.
+* **DOES NOT** supervise workers.
+* **DOES NOT** claim success or failure of individual plan steps.
+
+Delegate plans. It does not execute.
+
+---
+
+## 3. Roles, Not Masters
+
+LegiVellum has no “master executive component.”
+
+Instead, components may temporarily assume **roles** at runtime:
+
+* **Initiator** — accepts external intent (human, webhook, cron)
+* **Planner** — produces plans (Delegate)
+* **Broker** — exchanges responsibility (AsyncGate)
+* **Executor** — runs leases (CogniGate, CLI worker, REST/MCP worker)
+* **Archivist** — remembers truth (MemoryGate)
+* **Oracle** — defines the world (MetaGate)
+
+Roles are contextual and ephemeral.
+No role implies permanent authority.
+
+If you find yourself designing a component that:
+
+* must always be present
+* must always know “what’s going on”
+* must always decide “what happens next”
+
+You are re-introducing a master. Stop.
+
+---
+
+## 4. Communication Edges (Critical Constraint)
+
+To prevent combinatorial collapse, LegiVellum defines **preferred edges**.
+
+### Preferred (Default) Paths
+
+* Initiator → Delegate → AsyncGate → Executor
+* Executor → MemoryGate (receipts, artifacts)
+* Delegate → MemoryGate (context reads)
+* All components → MetaGate (bootstrap/config reads)
+
+### Discouraged / Exceptional Paths
+
+(Require explicit justification and documentation)
+
+* MemoryGate → AsyncGate
+* MetaGate → AsyncGate
+* AsyncGate → Executor (push instead of pull)
+* CogniGate → Delegate (implicit replanning)
+* MemoryGate initiating any action
+
+These are not “forbidden,” but every use increases system opacity.
+
+If you cannot explain the edge in one sentence, do not add it.
+
+---
+
+## 5. Authority Is Explicit (Leases Are Law)
+
+No component has implicit power.
+
+All authority must be encoded in the lease, for example:
+
+* permission to spawn additional leases
+* permission to call CogniGate
+* permission to expose tools
+* permission to write to MemoryGate beyond receipts
+* maximum recursion depth
+* allowed AsyncGates
+* allowed output sinks
+
+Recursive systems without explicit authority limits do not scale.
+They metastasize.
+
+---
+
+## 6. Canonical Reminder
+
+LegiVellum is not an orchestration engine.
+It is not a workflow DSL.
+It is not a control plane.
+
+It is a **receipt-driven system of responsibility transfer**.
+
+If something matters:
+
+* record it as a receipt
+
+If something cannot be recorded as a receipt:
+
+* it does not exist globally
+* treat it as local, fallible, and disposable
+
+Break this rule, and the system will punish you—not immediately, but *inevitably*.
+
+---
+
+If you want, next step I can:
+
+* tighten this into a formal RFC-style spec
+* add a short “failure modes” appendix (“If you see this symptom, you broke this rule”)
+* or write a parallel **“anti-patterns” page** that shows exactly how people will fuck this up
+
+But this page?
+This is the spine.
