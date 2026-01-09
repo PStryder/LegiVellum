@@ -1,0 +1,184 @@
+Gate v1 Exit Criteria Template
+
+Component: <GateName> (e.g., AsyncGate)
+Repo: <repo url>
+Owner: <name>
+Target tag: v1.0.0
+Date locked: <YYYY-MM-DD>
+
+Definition of Done
+
+A Gate is “v1-ready” when it is standalone deployable, contract-stable, and semantically correct against the LegiVellum primitives model. “v1” means: safe to integrate without reworking internals under pressure.
+
+1) Build & Run
+
+ One-command local run exists (Makefile/script): make dev / ./run_local.sh
+
+ Cold start succeeds (no import errors, no missing env)
+
+ Health endpoint returns OK (/health or equivalent)
+
+ Config is documented (env vars + defaults)
+
+ Container build works (docker build passes) (if applicable)
+
+Artifacts:
+
+Link to run instructions: <link/path>
+
+Example .env.example present: [ ]
+
+2) API & Contract Stability
+
+ Public API endpoints/routes are finalized for v1
+
+ Request/response schemas are versioned or stable
+
+ Error model is consistent (status codes + error envelope)
+
+ Backwards-incompatible changes are either avoided or explicitly versioned
+
+Notes on “v1 contract”:
+
+<bullet list of any intentional limitations>
+
+3) Canonical Principals (String IDs)
+
+Define constants in code (per repo):
+
+ SYSTEM_PRINCIPAL_ID = "sys:legivellum"
+
+ SERVICE_PRINCIPAL_ID = "svc:<component>" (e.g., svc:asyncgate)
+
+ External principals remain caller-provided strings (optionally prefixed ext:)
+
+Ownership rules enforced:
+
+ Internal-origin obligations ⇒ owner_principal_id = SYSTEM_PRINCIPAL_ID
+
+ External-origin obligations ⇒ owner_principal_id = <caller principal>
+
+ Child obligations inherit owner_principal_id unless explicit housekeeping rehome
+
+ Receipts are addressed to owner_principal_id (actor/emitter may differ)
+
+4) Receipt Model Invariants
+
+ Receipt types are enumerated and documented
+
+ Terminal receipt types are explicitly defined as a set:
+
+ TERMINAL_RECEIPT_TYPES = {...}
+
+ Terminator detection is type-gated (not “any matching parent closes”)
+
+ Parent/lineage rules enforced consistently:
+
+ terminal receipts include correct parents
+
+ non-terminal receipts never close obligations
+
+Mandatory terminal outcomes exist:
+
+ completed
+
+ failed (terminal)
+
+ canceled (terminal)
+
+ retryable failure uses a non-terminal type (if retries exist)
+
+5) Persistence & Migration
+
+ Database schema is stable for v1
+
+ Migrations run cleanly from empty DB
+
+ Upgrade path is documented for breaking DB changes (if any)
+
+ Seed/dev data is optional and repeatable
+
+DB notes:
+
+Storage engine: <postgres/sqlite/etc>
+
+Migration tool: <alembic/etc>
+
+6) Core Behavioral Guarantees (Standalone)
+
+For the Gate’s primary purpose, the “golden path” works end-to-end.
+
+Define the Golden Path for this component:
+
+<e.g., post task → claim lease → progress → complete → terminal receipt → closed>
+
+ Golden path demo script exists and passes locally
+
+ Results/outputs are locatable per your rules (artifact/delivery proof etc.)
+
+ Timeouts and long-running operations behave (no deadlocks / no infinite wait)
+
+7) Test Requirements
+
+ Unit tests pass
+
+ Integration tests (if present) pass
+
+ Minimum regression tests exist for the “scary bits”:
+
+Required regressions (copy/paste list):
+
+ cancel emits terminal receipt and closes obligation
+
+ ack/progress/anomaly does not close obligation
+
+ lease claim/renew/expire never triggers validation errors
+
+ dedupe behavior verified (hash computed or enforced)
+
+ terminator logic closes only on terminal receipt types
+
+Test run command:
+<pytest -q / npm test / etc>
+
+8) Observability & Debuggability
+
+ Logs include correlation keys (obligation_id / receipt_id / lease_id)
+
+ “What’s going on?” query path exists (basic list/search/get)
+
+ Failure modes are visible (not silent)
+
+(Optional but recommended)
+
+ Basic metrics counters for receipt creation, closure, retries, failures
+
+9) v1 Lock Rules
+
+When tagged v1.0.0, the following are frozen unless semver bump:
+
+ Receipt types and terminal semantics
+
+ Principal conventions and ownership rules
+
+ Public API schema (or explicit version bump)
+
+ DB schema without migration plan
+
+10) Open Issues / Deferred Work (Allowed, but Explicit)
+
+List what is not in v1, by design:
+
+ <deferred item>
+
+ <deferred item>
+
+ <deferred item>
+
+Sign-off
+
+ Owner sign-off
+
+ Integration readiness confirmed (contracts documented)
+
+ Tag created: v1.0.0
