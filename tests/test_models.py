@@ -3,8 +3,12 @@ Comprehensive Tests for LegiVellum Receipt Models
 
 Tests Pydantic models, serialization, and field validation.
 """
-import pytest
 from datetime import datetime, timezone
+import json
+from pathlib import Path
+
+import pytest
+
 from legivellum.models import (
     Receipt,
     ReceiptCreate,
@@ -184,6 +188,49 @@ class TestReceiptModel:
         assert json_data["receipt_id"] == "01JGXYZ123456789ABCDEFGHIJ"
         assert json_data["inputs"] == {"key": "value"}
         assert json_data["metadata"] == {"note": "test"}
+
+    def test_receipt_matches_json_schema(self):
+        """Receipt model should validate against spec/receipt.schema.v1.json"""
+        jsonschema = pytest.importorskip("jsonschema")
+        schema_path = Path(__file__).resolve().parents[1] / "spec" / "receipt.schema.v1.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        receipt = Receipt(
+            receipt_id="01JGXYZ123456789ABCDEFGHIJ",
+            task_id="T-01JGXYZ123456789ABCDEFGHIJ",
+            parent_task_id="NA",
+            caused_by_receipt_id="NA",
+            dedupe_key="NA",
+            attempt=0,
+            from_principal="user@example.com",
+            for_principal="user@example.com",
+            source_system="test",
+            recipient_ai="worker1",
+            trust_domain="default",
+            phase=Phase.ACCEPTED,
+            status=Status.NA,
+            realtime=False,
+            task_type="test.task",
+            task_summary="Test task",
+            task_body="TBD",
+            inputs={},
+            expected_outcome_kind=OutcomeKind.RESPONSE_TEXT,
+            expected_artifact_mime="NA",
+            outcome_kind=OutcomeKind.NA,
+            outcome_text="NA",
+            artifact_location="NA",
+            artifact_pointer="NA",
+            artifact_checksum="NA",
+            artifact_size_bytes=0,
+            artifact_mime="NA",
+            escalation_class=EscalationClass.NA,
+            escalation_reason="NA",
+            escalation_to="NA",
+            retry_requested=False,
+            metadata={},
+        )
+
+        jsonschema.validate(receipt.model_dump(), schema)
 
 
 class TestReceiptCreate:

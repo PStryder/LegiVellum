@@ -95,7 +95,7 @@ class Receipt(BaseModel):
     # Task definition
     task_type: str = Field(..., description="Category of task")
     task_summary: str = Field(..., description="Brief description of task")
-    task_body: str = Field(default="", description="Full task specification")
+    task_body: str = Field(default="TBD", description="Full task specification")
     inputs: dict[str, Any] = Field(default_factory=dict, description="Task input parameters")
     expected_outcome_kind: OutcomeKind = Field(
         default=OutcomeKind.NA,
@@ -235,7 +235,7 @@ class ReceiptCreate(BaseModel):
     # Task definition
     task_type: str
     task_summary: str
-    task_body: str = ""
+    task_body: str = "TBD"
     inputs: dict[str, Any] = Field(default_factory=dict)
     expected_outcome_kind: OutcomeKind = OutcomeKind.NA
     expected_artifact_mime: str = "NA"
