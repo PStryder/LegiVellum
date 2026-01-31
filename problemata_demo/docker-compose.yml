@@ -1,0 +1,218 @@
+version: "3.9"
+
+services:
+  metagate-db:
+    image: postgres:16-alpine
+    container_name: problemata-metagate-db
+    environment:
+      POSTGRES_USER: metagate
+      POSTGRES_PASSWORD: metagate
+      POSTGRES_DB: metagate
+    volumes:
+      - metagate_pg:/var/lib/postgresql/data
+      - ../../MetaGate/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metagate -d metagate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  metagate:
+    build:
+      context: ../../MetaGate
+      dockerfile: Dockerfile
+    container_name: problemata-metagate
+    environment:
+      METAGATE_DATABASE_URL: postgresql+asyncpg://metagate:metagate@metagate-db:5432/metagate
+      METAGATE_DEBUG: "true"
+      METAGATE_JWT_SECRET: ${METAGATE_JWT_SECRET:-dev-secret}
+      METAGATE_DEFAULT_TENANT_KEY: ${PROBLEMATA_TENANT_KEY:-default}
+      METAGATE_DEFAULT_DEPLOYMENT_KEY: ${PROBLEMATA_DEPLOYMENT_KEY:-local}
+    ports:
+      - "8100:8000"
+    depends_on:
+      metagate-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, os, urllib.request; url=os.environ.get('METAGATE_MCP_URL','http://localhost:8000/mcp'); token=os.environ.get('METAGATE_API_KEY'); payload={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'metagate.health','arguments':{}}}; req=urllib.request.Request(url, data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}); token and req.add_header('Authorization','Bearer '+token); resp=urllib.request.urlopen(req, timeout=5); data=json.load(resp); assert 'result' in data"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  metagate-seed:
+    image: python:3.11-slim
+    container_name: problemata-metagate-seed
+    profiles: ["seed"]
+    depends_on:
+      metagate-db:
+        condition: service_healthy
+    environment:
+      METAGATE_DB_DSN: postgresql://metagate:metagate@metagate-db:5432/metagate
+      PROBLEMATA_TENANT_KEY: ${PROBLEMATA_TENANT_KEY:-default}
+      PROBLEMATA_DEPLOYMENT_KEY: ${PROBLEMATA_DEPLOYMENT_KEY:-local}
+      PROBLEMATA_PRINCIPAL_KEY: ${PROBLEMATA_PRINCIPAL_KEY:-problemata-demo-principal}
+      PROBLEMATA_AUTH_SUBJECT: ${PROBLEMATA_AUTH_SUBJECT:-problemata-demo-subject}
+      PROBLEMATA_PROFILE_KEY: ${PROBLEMATA_PROFILE_KEY:-problemata-demo-profile}
+      PROBLEMATA_MANIFEST_KEY: ${PROBLEMATA_MANIFEST_KEY:-problemata-demo-manifest}
+      METAGATE_URL: http://metagate:8000
+      RECEIPTGATE_URL: http://receiptgate:8000
+      DEPOTGATE_URL: http://depotgate:8000
+      ASYNCGATE_URL: http://asyncgate:8080
+    volumes:
+      - ./seed_metagate.py:/seed_metagate.py:ro
+    command: ["sh", "-c", "pip install --no-cache-dir asyncpg && python /seed_metagate.py"]
+
+  receiptgate:
+    image: python:3.11-slim
+    container_name: problemata-receiptgate
+    working_dir: /app/receiptgate
+    environment:
+      RECEIPTGATE_DATABASE_URL: sqlite:////data/receiptgate.db
+      RECEIPTGATE_ALLOW_INSECURE_DEV: "true"
+      RECEIPTGATE_ENABLE_GRAPH_LAYER: "false"
+      RECEIPTGATE_ENABLE_SEMANTIC_LAYER: "false"
+      RECEIPTGATE_AUTO_MIGRATE_ON_STARTUP: "true"
+    ports:
+      - "8300:8000"
+    volumes:
+      - ../../ReceiptGate:/app/receiptgate
+      - receiptgate_data:/data
+    command: ["sh", "-c", "pip install --no-cache-dir /app/receiptgate && receiptgate"]
+
+  asyncgate-db:
+    image: postgres:16-alpine
+    container_name: problemata-asyncgate-db
+    environment:
+      POSTGRES_DB: asyncgate
+      POSTGRES_USER: asyncgate
+      POSTGRES_PASSWORD: asyncgate
+    volumes:
+      - asyncgate_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asyncgate -d asyncgate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  asyncgate:
+    build:
+      context: ../../AsyncGate
+      dockerfile: Dockerfile
+    container_name: problemata-asyncgate
+    environment:
+      ASYNCGATE_ENV: development
+      ASYNCGATE_DATABASE_URL: postgresql+asyncpg://asyncgate:asyncgate@asyncgate-db:5432/asyncgate
+      ASYNCGATE_API_KEY: ${ASYNCGATE_API_KEY:-dev_asyncgate_key}
+      ASYNCGATE_ALLOW_INSECURE_DEV: "true"
+      ASYNCGATE_RECEIPT_MODE: receiptgate_integrated
+      ASYNCGATE_RECEIPTGATE_URL: http://receiptgate:8000
+      ASYNCGATE_RECEIPTGATE_TENANT_ID: ${PROBLEMATA_TENANT_KEY:-default}
+      ASYNCGATE_RATE_LIMIT_ENABLED: "false"
+    ports:
+      - "8400:8080"
+    depends_on:
+      asyncgate-db:
+        condition: service_healthy
+      receiptgate:
+        condition: service_started
+    volumes:
+      - ../../LegiVellum/shared:/LegiVellum/shared:ro
+    command: >
+      sh -c "
+        echo 'Running AsyncGate migrations...' &&
+        alembic upgrade head &&
+        echo 'Starting AsyncGate...' &&
+        uvicorn asyncgate.main:app --host 0.0.0.0 --port 8080
+      "
+
+  depotgate-db:
+    image: postgres:16-alpine
+    container_name: problemata-depotgate-db
+    environment:
+      POSTGRES_USER: depotgate
+      POSTGRES_PASSWORD: depotgate
+      POSTGRES_DB: depotgate_metadata
+    volumes:
+      - depotgate_pg:/var/lib/postgresql/data
+      - ../../DepotGate/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U depotgate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  depotgate:
+    build:
+      context: ../../DepotGate
+      dockerfile: Dockerfile
+    container_name: problemata-depotgate
+    environment:
+      DEPOTGATE_POSTGRES_HOST: depotgate-db
+      DEPOTGATE_POSTGRES_PORT: 5432
+      DEPOTGATE_POSTGRES_USER: depotgate
+      DEPOTGATE_POSTGRES_PASSWORD: depotgate
+      DEPOTGATE_POSTGRES_METADATA_DB: depotgate_metadata
+      DEPOTGATE_POSTGRES_RECEIPTS_DB: depotgate_receipts
+      DEPOTGATE_STORAGE_BASE_PATH: /app/data/staging
+      DEPOTGATE_SINK_FILESYSTEM_BASE_PATH: /app/data/shipped
+      DEPOTGATE_DEBUG: "false"
+      DEPOTGATE_ALLOW_INSECURE_DEV: "true"
+    ports:
+      - "8200:8000"
+    volumes:
+      - depotgate_staging:/app/data/staging
+      - depotgate_shipped:/app/data/shipped
+    depends_on:
+      depotgate-db:
+        condition: service_healthy
+
+  cognigate:
+    build:
+      context: ../../CogniGate
+      dockerfile: Dockerfile
+    container_name: problemata-cognigate
+    environment:
+      COGNIGATE_STANDALONE_MODE: "false"
+      COGNIGATE_ASYNCGATE_ENDPOINT: http://asyncgate:8080
+      COGNIGATE_ASYNCGATE_AUTH_TOKEN: ${ASYNCGATE_API_KEY:-dev_asyncgate_key}
+      COGNIGATE_ASYNCGATE_TENANT_ID: ${PROBLEMATA_TENANT_KEY:-default}
+      COGNIGATE_RECEIPTGATE_ENDPOINT: http://receiptgate:8000
+      COGNIGATE_RECEIPTGATE_EMIT_RECEIPTS: "true"
+      COGNIGATE_RECEIPTGATE_AUTH_TOKEN: ""
+      COGNIGATE_AI_ENDPOINT: ${COGNIGATE_AI_ENDPOINT:-https://openrouter.ai/api/v1}
+      COGNIGATE_AI_API_KEY: ${COGNIGATE_AI_API_KEY}
+      COGNIGATE_AI_MODEL: ${COGNIGATE_AI_MODEL:-anthropic/claude-3-opus}
+      COGNIGATE_API_KEY: ${COGNIGATE_API_KEY:-}
+      COGNIGATE_REQUIRE_AUTH: "false"
+      COGNIGATE_ALLOW_INSECURE_DEV: "true"
+      COGNIGATE_WORKER_ID: ${COGNIGATE_WORKER_ID:-cognigate-demo-1}
+      COGNIGATE_MAX_CONCURRENT_JOBS: "1"
+      COGNIGATE_JOB_TIMEOUT: "300"
+    ports:
+      - "8500:8000"
+    volumes:
+      - ./cognigate_config:/etc/cognigate:ro
+      - ../../LegiVellum/shared:/LegiVellum/shared:ro
+    depends_on:
+      asyncgate:
+        condition: service_started
+      receiptgate:
+        condition: service_started
+      depotgate:
+        condition: service_started
+
+volumes:
+  metagate_pg:
+  asyncgate_pg:
+  depotgate_pg:
+  depotgate_staging:
+  depotgate_shipped:
+  receiptgate_data:
+
+networks:
+  default:
+    name: problemata-demo

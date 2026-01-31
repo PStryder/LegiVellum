@@ -1,0 +1,11 @@
+mcp_endpoints:
+  - name: depotgate
+    endpoint: http://depotgate:8000/mcp
+    auth_token: ""
+    read_only: false
+    enabled: true
+  - name: receiptgate
+    endpoint: http://receiptgate:8000/mcp
+    auth_token: ""
+    read_only: false
+    enabled: true
