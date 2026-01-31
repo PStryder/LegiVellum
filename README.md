@@ -67,6 +67,12 @@ Core fields for all receipts:
 - `scope` - Out of scope
 - `other` - Other reason
 
+## Worker Docs (Start Here)
+
+- `WORKER_QUICKSTART.md`
+- `docs/canonical/worker.contract.md`
+- `examples/minimal_worker/README.md`
+
 ## Project Structure
 
 ```
