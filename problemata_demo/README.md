@@ -5,7 +5,7 @@ stack: MetaGate, ReceiptGate, AsyncGate, CogniGate, and DepotGate.
 
 ## Quick Start
 
-1) Copy the env template and set your AI provider key:
+1) Copy the env template and set your AI provider key (only needed if you run CogniGate):
 
 ```bash
 copy .env.example .env
@@ -26,6 +26,31 @@ docker compose --profile seed run --rm metagate-seed
 
 The seed output prints an API key for MetaGate bootstrap calls.
 
+## Demo Scripts (Minimal Worker)
+
+These scripts run a minimal worker loop (no AI key required) and exercise the
+receipt chain using ReceiptGate's MCP endpoints.
+
+Golden path:
+
+```bash
+python golden_path.py
+```
+
+Escalation path (uses lease expiry + fallback worker):
+
+```bash
+python escalation_path.py
+```
+
+## Optional CogniGate
+
+CogniGate is behind the `cognigate` profile to avoid requiring an AI key:
+
+```bash
+docker compose --profile cognigate up -d
+```
+
 ## Service Ports (host -> container)
 
 - MetaGate: http://localhost:8100
@@ -39,7 +64,9 @@ The seed output prints an API key for MetaGate bootstrap calls.
 - ReceiptGate runs against a local SQLite file stored in the `receiptgate_data`
   Docker volume. (Swap to PostgreSQL if desired.)
 - AsyncGate is configured to emit receipts directly to ReceiptGate.
-- CogniGate is configured to poll AsyncGate and emit receipts to ReceiptGate.
+- AsyncGate escalation routing defaults to `fallback-worker` (edit
+  `docker-compose.yml` or env vars if you want a different fallback).
+- CogniGate (optional) is configured to poll AsyncGate and emit receipts to ReceiptGate.
 - CogniGate MCP config includes a DepotGate endpoint for artifact delivery.
 
 ## Seed Defaults (override via .env)

@@ -111,6 +111,10 @@ services:
       ASYNCGATE_RECEIPTGATE_URL: http://receiptgate:8000
       ASYNCGATE_RECEIPTGATE_TENANT_ID: ${PROBLEMATA_TENANT_KEY:-default}
       ASYNCGATE_RATE_LIMIT_ENABLED: "false"
+      ASYNCGATE_ESCALATION_ENABLED: "true"
+      ASYNCGATE_ESCALATION_TARGETS: '[{"class":1,"to_kind":"worker","to_id":"fallback-worker"}]'
+      ASYNCGATE_DEFAULT_LEASE_TTL_SECONDS: "10"
+      ASYNCGATE_LEASE_SWEEP_INTERVAL_SECONDS: "2"
     ports:
       - "8400:8080"
     depends_on:
@@ -175,6 +179,7 @@ services:
       context: ../../CogniGate
       dockerfile: Dockerfile
     container_name: problemata-cognigate
+    profiles: ["cognigate"]
     environment:
       COGNIGATE_STANDALONE_MODE: "false"
       COGNIGATE_ASYNCGATE_ENDPOINT: http://asyncgate:8080
