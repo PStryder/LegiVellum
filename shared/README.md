@@ -6,6 +6,7 @@ Common models, schemas, and utilities for the LegiVellum system.
 
 - `models.py` - Pydantic models for receipts and API contracts
 - `validation.py` - Receipt validation utilities
+- `problemata_validation.py` - Problemata spec validation (atomic, v0 skeleton)
 - `database.py` - PostgreSQL connection utilities
 - `auth.py` - Authentication/authorization utilities
 
@@ -34,4 +35,12 @@ receipt = Receipt(
 
 # Validate receipt data
 errors = validate_receipt(receipt.model_dump())
+```
+
+```python
+from legivellum import validate_problemata_spec
+
+result = validate_problemata_spec(problemata_spec)
+if result.status != "passed":
+    print(result.errors)
 ```

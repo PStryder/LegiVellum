@@ -1,0 +1,536 @@
+LEGACY NOTE (2026-01-26): Canonical LegiVellum protocol is MCP-only. Any REST/HTTP endpoint references in this document are historical and non-normative.
+
+LEGACY NOTE (2026-01-26): This document is historical. ReceiptGate is the canonical receipt ledger; references to MemoryGate as receipt store are historical. Canonical contracts in /LegiVellum/docs/canonical/ override.
+
+# MemoryGate Inbox Receipt Extension
+
+**Created:** 2026-01-03  
+**Updated:** 2026-01-03 (Inbox Ownership Invariant)  
+**Status:** Design / Concept  
+**Purpose:** Enable MemoryGate to accept third-party inbox receipts on behalf of AI identities
+
+---
+
+## Core Concept
+
+MemoryGate gains one new capability: **accepting inbox receipts from external systems**.
+
+**Not:** Task orchestration, notification management, payload storage  
+**Actually:** Delivery mechanism for "you have a message" notifications
+
+External systems (AsyncGate, email integrators, API monitors, etc.) can post receipts to MemoryGate saying "there's something for this AI to see." MemoryGate stores the receipt, surfaces it in bootstrap, and lets the AI mark it read/archived.
+
+**Boundary:** MemoryGate stores receipts with pointers, never fetches payloads or manages task state.
+
+**Critical Design Invariant - Inbox Ownership:**
+
+**Inbox receipts are owned by exactly one cognitive entity.** Each receipt has a `recipient_ai` - there is no shared inbox or competitive claiming.
+
+- ✅ **Explicit routing:** Receipt targets exactly one `recipient_ai`
+- ✅ **Explicit escalation:** Domain DeleGate creates NEW receipt for Principal (not shared)
+- ❌ **No shared inbox:** Multiple entities competing for same receipt
+- ❌ **No leasing:** No inbox claiming semantics like AsyncGate worker coordination
+
+**Why This Matters:**
+
+Without strict ownership, you get race conditions:
+- "Did Domain DeleGate A or B process this receipt?"
+- "Who owns the follow-up work?"  
+- "Has anyone seen this, or is everyone assuming someone else will?"
+
+With strict ownership:
+- Receipt delivered to exactly one inbox (`recipient_ai`)
+- That entity owns the response
+- Escalation creates new receipt with new owner (upward routing)
+- No ambiguity, no races
+
+**Escalation Pattern:**
+
+Domain DeleGate receives execution receipt → processes results → creates NEW escalation receipt:
+
+```python
+# Domain DeleGate receives execution receipt
+execution_receipt = read_inbox_receipt(receipt_id)
+results = asyncgate.fetch_task_result(execution_receipt.metadata['task_id'])
+
+# Process results, create escalation
+escalation_summary = synthesize_for_principal(results)
+
+# Create NEW receipt for Principal (not share existing one)
+post_receipt_to_memorygate(
+    recipient_ai="Principal",  # Different recipient
+    source_system="domain_delegate_research",
+    dedupe_key=f"escalation:research_complete:{execution_receipt.receipt_id}",
+    summary=escalation_summary,
+    metadata={"original_receipt": execution_receipt.receipt_id}
+)
+```
+
+Each tier has its own inbox. Escalation = new receipt upward, not shared visibility.
+
+---
+
+## Database Schema
+
+### Minimal Addition
+
+Add inbox receipt storage (can be separate table or entry type in existing table):
+
+```sql
+CREATE TABLE inbox_receipts (
+    id SERIAL PRIMARY KEY,
+    receipt_id VARCHAR(100) UNIQUE NOT NULL,  -- Server-generated UUID
+    
+    -- Identity
+    recipient_ai VARCHAR(50) NOT NULL,         -- "Kee", "Hexy", etc
+    source_system VARCHAR(50) NOT NULL,        -- "asyncgate", "email_monitor", etc
+    
+    -- Deduplication (critical for reliability)
+    dedupe_key VARCHAR(200) UNIQUE NOT NULL,   -- Prevents double-sends
+    
+    -- Content
+    title VARCHAR(200),
+    summary TEXT NOT NULL,
+    metadata JSONB,                            -- System-specific data
+    
+    -- Lifecycle (same semantics as AsyncGate)
+    created_at TIMESTAMP DEFAULT NOW(),
+    delivered_at TIMESTAMP,                    -- Set when returned by bootstrap
+    read_at TIMESTAMP,                         -- Set when AI acts on it
+    archived_at TIMESTAMP,                     -- Hidden from active inbox
+    
+    INDEX idx_unread (recipient_ai, read_at, archived_at) WHERE read_at IS NULL AND archived_at IS NULL,
+    INDEX idx_source (source_system, created_at)
+);
+```
+
+**Alternative (if using generic entries table):**
+```sql
+-- Just add to existing memory entries
+ALTER TABLE memory_entries ADD COLUMN entry_type VARCHAR(50);
+ALTER TABLE memory_entries ADD COLUMN dedupe_key VARCHAR(200) UNIQUE;
+
+-- Inbox receipts are entries with:
+-- entry_type = 'inbox_receipt'
+-- domain = source_system
+-- observation = summary
+-- metadata = JSONB with receipt data
+```
+
+---
+
+## Internal API (Service-to-Service)
+
+**Not exposed as public MCP tool.** This is an internal endpoint for system-to-system communication.
+
+### POST /internal/inbox/receipt
+
+Create inbox receipt for an AI.
+
+**Authentication:** Service token / shared secret (not user OAuth)
+
+```http
+POST /internal/inbox/receipt
+Headers:
+    X-Service-Token: <shared_secret_between_asyncgate_and_memorygate>
+Content-Type: application/json
+
+Body:
+{
+    "recipient_ai": "Kee",
+    "source_system": "asyncgate",
+    "dedupe_key": "asyncgate:task_complete:abc123:run_7",
+    "title": "Model Consultation Complete",
+    "summary": "Consulted 3 models successfully (GPT-4o, Claude Opus, DeepSeek Coder)",
+    "metadata": {
+        "task_id": "abc123",
+        "task_type": "model_consultation",
+        "status": "complete",
+        "result_channel": "email",
+        "result_pointer": "email:message-id-xyz@mail.com",
+        "created_at": "2026-01-03T20:15:00Z"
+    }
+}
+
+Response (200 OK):
+{
+    "receipt_id": "rcpt_550e8400",
+    "dedupe_key": "asyncgate:task_complete:abc123:run_7",
+    "created_at": "2026-01-03T20:15:01Z"
+}
+
+Response (409 Conflict) - Duplicate:
+{
+    "error": "duplicate_receipt",
+    "existing_receipt_id": "rcpt_550e8400",
+    "message": "Receipt with this dedupe_key already exists"
+}
+```
+
+### Dedupe Key Format
+
+Recommended pattern: `{source_system}:{event_type}:{entity_id}:{version}`
+
+Examples:
+```
+asyncgate:task_complete:abc123:run_7
+asyncgate:task_failed:def456:run_3
+email_monitor:new_message:msg_id_xyz:v1
+api_monitor:rate_limit_warning:openai:20260103
+```
+
+---
+
+## MCP Tool Updates
+
+### Extended memory_bootstrap()
+
+Existing tool gains inbox receipt counts and items:
+
+```python
+@mcp.tool()
+def memory_bootstrap(ai_name: str, ai_platform: str):
+    """
+    Existing functionality + inbox receipts.
+    
+    Returns:
+        # Existing fields
+        - status: "initialized"
+        - sessions: [{conversation_id, title, updated_at}, ...]
+        - observations_count: int
+        - patterns_count: int
+        
+        # New fields
+        - inbox_unread_count: int
+        - inbox_items: [{receipt_id, source_system, title, summary, created_at}, ...]
+                       (max 10 most recent unread)
+        - inbox_more_waiting: int (additional unread beyond 10)
+    """
+    # Implementation auto-marks delivered_at on inbox items returned
+    inbox_items = db.execute("""
+        UPDATE inbox_receipts
+        SET delivered_at = COALESCE(delivered_at, NOW())
+        WHERE recipient_ai = :ai_name
+          AND read_at IS NULL
+          AND archived_at IS NULL
+        RETURNING receipt_id, source_system, title, summary, created_at
+        ORDER BY created_at DESC
+        LIMIT 10
+    """, {"ai_name": ai_name})
+    
+    return {
+        # ... existing fields
+        "inbox_unread_count": len(inbox_items) + more_waiting,
+        "inbox_items": inbox_items[:10],
+        "inbox_more_waiting": max(0, more_waiting)
+    }
+```
+
+### New Inbox Management Tools
+
+```python
+@mcp.tool()
+def get_inbox_receipts(
+    unread_only: bool = True,
+    limit: int = 10,
+    source_system: str = None
+):
+    """
+    Get inbox receipts.
+    
+    Args:
+        unread_only: Only unread receipts
+        limit: Max receipts to return
+        source_system: Filter by source (e.g., "asyncgate")
+    
+    Returns:
+        [{receipt_id, source_system, title, summary, metadata, created_at}, ...]
+    """
+
+@mcp.tool()
+def read_inbox_receipt(receipt_id: str):
+    """
+    Mark receipt as read and get full details.
+    
+    Returns:
+        - receipt: {receipt_id, source_system, title, summary, metadata, ...}
+        - next_action: Suggested action based on source_system and metadata
+    """
+    # Sets read_at = NOW()
+    # Returns full metadata for AI to determine action
+
+@mcp.tool()
+def archive_inbox_receipt(receipt_id: str):
+    """
+    Archive a receipt (hides from inbox, keeps for history).
+    """
+    # Sets archived_at = NOW()
+```
+
+---
+
+## Integration with AsyncGate
+
+AsyncGate posts receipts to MemoryGate when tasks complete/fail.
+
+### AsyncGate Implementation
+
+```python
+# asyncgate/integrations/memorygate.py
+import httpx
+
+MEMORYGATE_URL = "https://memorygate.memorygate.ai"
+SERVICE_TOKEN = os.getenv("MEMORYGATE_SERVICE_TOKEN")
+
+async def send_receipt(task):
+    """
+    Post inbox receipt to MemoryGate when task completes.
+    """
+    receipt = {
+        "recipient_ai": task.recipient_ai,
+        "source_system": "asyncgate",
+        "dedupe_key": f"asyncgate:task_{task.status}:{task.task_id}:{task.run_id}",
+        "title": format_title(task),
+        "summary": task.summary or format_summary(task),
+        "metadata": {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "status": task.status,
+            "result_channel": task.result_channel,
+            "result_pointer": task.result_pointer,
+            "created_at": task.completed_at.isoformat()
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{MEMORYGATE_URL}/internal/inbox/receipt",
+            json=receipt,
+            headers={"X-Service-Token": SERVICE_TOKEN}
+        )
+        
+        if response.status_code == 409:
+            # Duplicate - already sent, idempotent success
+            return response.json()["existing_receipt_id"]
+        
+        response.raise_for_status()
+        return response.json()["receipt_id"]
+
+# Called from worker completion handler
+async def handle_task_completion(task_id, run_id, ...):
+    # Update task in AsyncGate DB
+    await db.mark_task_complete(...)
+    
+    # Send receipt to MemoryGate
+    receipt_id = await send_receipt(task)
+    
+    # Log for debugging
+    logger.info(f"Sent receipt {receipt_id} to MemoryGate for task {task_id}")
+```
+
+### AI Workflow
+
+```python
+# Session start
+bootstrap = memory_bootstrap("Kee", "Claude")
+print(f"You have {bootstrap['inbox_unread_count']} inbox items")
+
+for item in bootstrap['inbox_items']:
+    print(f"- {item['source_system']}: {item['title']}")
+
+# Read receipt
+receipt = read_inbox_receipt(bootstrap['inbox_items'][0]['receipt_id'])
+
+if receipt['metadata']['source_system'] == 'asyncgate':
+    # It's from AsyncGate - fetch the actual result
+    task_id = receipt['metadata']['task_id']
+    result_pointer = receipt['metadata']['result_pointer']
+    
+    # Use AsyncGate to fetch payload
+    result = asyncgate.fetch_task_result(task_id)
+    
+    # Process result...
+    
+    # Store in MemoryGate permanent memory
+    memory_store(observation=..., domain=...)
+    
+    # Archive the receipt
+    archive_inbox_receipt(receipt['receipt_id'])
+```
+
+---
+
+## Security Considerations
+
+### Service Authentication
+
+```python
+# Service token generation (one-time setup)
+import secrets
+SERVICE_TOKEN = secrets.token_urlsafe(64)
+
+# Store in both systems:
+# AsyncGate: MEMORYGATE_SERVICE_TOKEN=<token>
+# MemoryGate: ASYNCGATE_SERVICE_TOKEN=<token>
+
+# Verification in MemoryGate
+@app.post("/internal/inbox/receipt")
+async def create_inbox_receipt(request: Request, receipt: InboxReceipt):
+    token = request.headers.get("X-Service-Token")
+    
+    # Verify token matches expected source_system
+    expected_token = get_service_token(receipt.source_system)
+    
+    if not secrets.compare_digest(token or "", expected_token):
+        raise HTTPException(403, "Invalid service token")
+    
+    # Process receipt...
+```
+
+### Rate Limiting
+
+```python
+# Per source_system rate limits
+RATE_LIMITS = {
+    "asyncgate": 1000,  # receipts per hour
+    "email_monitor": 500,
+    "default": 100
+}
+
+# Track in Redis or in-memory
+rate_limiter.check(source_system, limit=RATE_LIMITS.get(source_system, 100))
+```
+
+---
+
+## Benefits of This Design
+
+**1. Clean Separation of Concerns:**
+- MemoryGate: Inbox delivery mechanism
+- AsyncGate: Task orchestration + pointer registry
+- Each system stays focused
+
+**2. Generic Pattern:**
+Not AsyncGate-specific. Any system can post receipts:
+- Email monitors
+- API rate limit watchers
+- Scheduled report generators
+- Cross-AI communication systems
+
+**3. Idempotent by Design:**
+Dedupe keys prevent double-sends from retries. Safe to call multiple times.
+
+**4. Minimal Surface Area:**
+One internal endpoint. Existing bootstrap tool extended. No new public APIs needed.
+
+**5. Provenance Preserved:**
+`source_system` field tracks where receipt came from. Metadata preserved for debugging.
+
+---
+
+## Alternative: Reuse Existing Memory Tables
+
+If MemoryGate already has a generic entries/observations table:
+
+```python
+# Store inbox receipts as observations with special type
+memory_store(
+    observation=summary,
+    domain=source_system,
+    confidence=1.0,
+    evidence=[],
+    metadata={
+        "entry_type": "inbox_receipt",
+        "dedupe_key": dedupe_key,
+        "receipt_data": metadata
+    }
+)
+
+# Filter in bootstrap
+inbox_items = memory_recall(
+    domain=None,  # Any domain
+    filters={"metadata.entry_type": "inbox_receipt"}
+)
+```
+
+This requires zero schema changes - just a convention.
+
+---
+
+## Migration Path
+
+**Phase 1:** Add inbox table + internal endpoint to MemoryGate
+**Phase 2:** Update AsyncGate to post receipts on task completion
+**Phase 3:** Update memory_bootstrap() to include inbox items
+**Phase 4:** Test end-to-end: task complete → receipt posted → AI sees in bootstrap
+
+**Rollout strategy:**
+- MemoryGate deploys first (new endpoint, backward compatible)
+- AsyncGate deploys second (starts posting receipts)
+- No downtime required
+
+---
+
+## Example Receipt Formats
+
+### AsyncGate Task Complete
+
+```json
+{
+  "recipient_ai": "Kee",
+  "source_system": "asyncgate",
+  "dedupe_key": "asyncgate:task_complete:abc123:run_7",
+  "title": "Model Consultation Complete",
+  "summary": "Consulted 3 models: GPT-4o, Claude Opus, DeepSeek",
+  "metadata": {
+    "task_id": "abc123",
+    "task_type": "model_consultation",
+    "status": "complete",
+    "result_channel": "email",
+    "result_pointer": "email:msg-xyz@mail.com"
+  }
+}
+```
+
+### Email Monitor
+
+```json
+{
+  "recipient_ai": "Kee",
+  "source_system": "email_monitor",
+  "dedupe_key": "email_monitor:new_message:msg_abc:v1",
+  "title": "New Email from PStryder",
+  "summary": "Subject: Quick question about AsyncGate design",
+  "metadata": {
+    "message_id": "msg_abc",
+    "from": "pstryder@example.com",
+    "subject": "Quick question about AsyncGate design",
+    "received_at": "2026-01-03T21:00:00Z"
+  }
+}
+```
+
+### API Rate Limit Warning
+
+```json
+{
+  "recipient_ai": "Hexy",
+  "source_system": "api_monitor",
+  "dedupe_key": "api_monitor:rate_limit:openai:20260103",
+  "title": "OpenAI API Rate Limit Warning",
+  "summary": "80% of daily quota consumed (8000/10000 requests)",
+  "metadata": {
+    "provider": "openai",
+    "quota_used": 8000,
+    "quota_total": 10000,
+    "reset_at": "2026-01-04T00:00:00Z"
+  }
+}
+```
+
+---
+
+*Concept documented: 2026-01-03*  
+*Purpose: Minimal MemoryGate extension to accept third-party inbox receipts*  
+*Integration: Works with AsyncGate and any other notification source*
+

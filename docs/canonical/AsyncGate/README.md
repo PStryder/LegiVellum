@@ -1,0 +1,204 @@
+# AsyncGate
+
+Durable, lease-based asynchronous task execution MCP server.
+
+## Overview
+
+AsyncGate is a standalone MCP server providing durable, lease-based asynchronous execution for agents. It solves: "delegate work without blocking, and reliably recover results later."
+
+AsyncGate does **not** plan, reason, schedule, or orchestrate strategy. It stores work, leases it, and records outcomes.
+
+## Architecture
+
+### Roles
+
+- **Agent (TASKER)**: Creates tasks, fetches status/results
+- **AsyncGate Server**: Source of truth for task state, leases, results, audit trail
+- **Worker Services (TASKEEs)**: External services that claim and execute tasks
+
+### Core Concepts
+
+- **Tasks**: Units of work with type, payload, requirements, and lifecycle state
+- **Leases**: Time-bounded exclusive claims on tasks by workers
+- **Receipts**: Immutable contract records for audit and coordination
+
+## Canonical Alignment (LegiVellum)
+
+- Bootstraps from MetaGate for resolved config, secrets, and routing.
+- Emits receipts to ReceiptGate (canonical ledger; may be implemented as a MemoryGate profile).
+- Stores artifacts in DepotGate; receipts carry artifact pointers.
+- MetaGate instantiates only validated problemata (validation by LegiVellum platform).
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- PostgreSQL 15+
+- Docker (for deployment)
+
+### Local Development
+
+```bash
+# Install dependencies
+pip install -e ".[dev]"
+
+# Set up environment
+export ASYNCGATE_DATABASE_URL="postgresql+asyncpg://asyncgate:asyncgate@localhost:5432/asyncgate"
+
+# Run migrations
+alembic upgrade head
+
+# Start server
+asyncgate
+```
+
+### Docker
+
+```bash
+# Build image
+docker build -t asyncgate .
+
+# Run container
+docker run -p 8080:8080 \
+  -e ASYNCGATE_DATABASE_URL="postgresql+asyncpg://..." \
+  asyncgate
+```
+
+## Deployment
+
+AsyncGate supports three deployment methods:
+
+### Fly.io (Recommended for Production)
+```bash
+./deploy-fly.sh
+```
+
+See [Fly Operations Guide](docs/FLY_OPERATIONS.md) for details.
+
+### Kubernetes
+```bash
+# Create secrets
+kubectl create secret generic asyncgate-secrets \
+  --from-literal=ASYNCGATE_API_KEY=your-key \
+  --from-literal=ASYNCGATE_DATABASE_URL=postgresql://... \
+  -n asyncgate
+
+# Deploy
+kubectl apply -k k8s/overlays/prod
+```
+
+See [k8s/README.md](k8s/README.md) for details.
+
+### Docker Compose (Development)
+```bash
+docker-compose up --build
+```
+
+## MCP Tool Surface
+
+Payloads follow the AsyncGate contract in `asyncgate.lease.md` and the
+canonical tool definitions in `AsyncGate Spec.txt`.
+
+### Agent (TASKER) Tools
+
+- `asyncgate.bootstrap` — Bootstrap obligations/inbox
+- `asyncgate.create_task` — Create a new task
+- `asyncgate.get_task` — Get task by ID
+- `asyncgate.list_tasks` — List tasks
+- `asyncgate.cancel_task` — Cancel a task
+- `asyncgate.list_receipts` — List receipts for a principal
+- `asyncgate.ack_receipt` — Acknowledge a receipt (optional)
+- `asyncgate.check_terminator` — Check termination evidence for a receipt (optional)
+- `asyncgate.get_config` — Get server configuration (optional)
+
+### Worker (TASKEE) Tools
+
+- `asyncgate.lease_next` — Claim next available tasks
+- `asyncgate.renew_lease` — Renew a lease
+- `asyncgate.report_progress` — Report progress (optional)
+- `asyncgate.complete` — Mark task completed
+- `asyncgate.fail` — Mark task failed
+
+### MCP Tools
+
+TASKER tools:
+- `asyncgate.bootstrap`
+- `asyncgate.create_task`
+- `asyncgate.get_task`
+- `asyncgate.list_tasks`
+- `asyncgate.cancel_task`
+- `asyncgate.list_receipts`
+- `asyncgate.ack_receipt`
+
+TASKEE tools:
+- `asyncgate.lease_next`
+- `asyncgate.renew_lease`
+- `asyncgate.report_progress`
+- `asyncgate.complete`
+- `asyncgate.fail`
+
+System:
+- `asyncgate.health`
+- `asyncgate.get_config`
+
+## Configuration
+
+Environment variables (prefix `ASYNCGATE_`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | postgresql+asyncpg://... | PostgreSQL connection URL |
+| `REDIS_URL` | - | Redis URL for rate limiting |
+| `ENV` | development | Environment (development/staging/production) |
+| `INSTANCE_ID` | asyncgate-1 | Instance identifier |
+| `LOG_LEVEL` | INFO | Logging level |
+| `DEBUG` | false | Debug mode |
+| `DEFAULT_LEASE_TTL_SECONDS` | 120 | Default lease TTL |
+| `MAX_LEASE_TTL_SECONDS` | 1800 | Maximum lease TTL (30 min) |
+| `MAX_LEASE_RENEWALS` | 10 | Maximum lease renewals before forced release |
+| `MAX_LEASE_LIFETIME_SECONDS` | 7200 | Absolute max lease lifetime (2 hours) |
+| `DEFAULT_MAX_ATTEMPTS` | 2 | Default max retry attempts |
+| `DEFAULT_RETRY_BACKOFF_SECONDS` | 15 | Default retry backoff |
+| `RECEIPT_MODE` | standalone | Receipt storage mode (standalone/receiptgate_integrated) |
+| `API_KEY` | - | API key for authentication |
+| `ALLOW_INSECURE_DEV` | false | Allow unauthenticated in dev mode |
+| `RATE_LIMIT_ENABLED` | true | Enable rate limiting |
+| `RATE_LIMIT_BACKEND` | memory | Rate limit backend (memory/redis) |
+| `RATE_LIMIT_DEFAULT_CALLS` | 100 | Default calls per window |
+| `RATE_LIMIT_DEFAULT_WINDOW_SECONDS` | 60 | Rate limit window size |
+
+## Task Lifecycle
+
+States: `queued`, `running`, `leased`, `succeeded`, `failed`, `canceled`
+
+```
+queued -> running -> leased -> succeeded
+                            \-> failed -> queued (retry)
+                             \-> canceled
+```
+
+### State Transitions
+
+- `queued -> running`: Worker picks up task
+- `running -> leased`: Task claimed with lease
+- `leased -> succeeded`: Task completes successfully
+- `leased -> failed`: Task fails (may retry)
+- `queued/leased -> canceled`: Task canceled
+- `failed -> queued`: Retry with backoff (if attempts remaining)
+- `leased -> queued`: Lease expires (system-driven)
+
+Terminal states: `succeeded`, `failed`, `canceled`
+
+## Invariants
+
+1. At most one active lease per task
+2. Lease enforcement: mutations require matching lease_id + worker_id
+3. Lease expiry: expired leases allow task to be reclaimed
+4. Idempotent creation: same idempotency_key returns same task_id
+5. Terminal states are immutable
+6. State machine is authoritative; receipts are proofs
+
+## License
+
+MIT

@@ -1,0 +1,3059 @@
+LEGACY NOTE (2026-01-26): Canonical LegiVellum protocol is MCP-only. Any REST/HTTP endpoint references in this document are historical and non-normative.
+
+LEGACY NOTE (2026-01-26): This document is historical. ReceiptGate is the canonical receipt ledger; references to MemoryGate as receipt store are historical. Canonical contracts in /LegiVellum/docs/canonical/ override.
+
+# AsyncGate - Autonomous Task Orchestration Service
+
+**Created:** 2026-01-03  
+**Updated:** 2026-01-04 (Receipt Protocol Integration)  
+**Status:** Design / Concept
+
+**See `trilogy_recursive_cognition_architecture.md` for system-level context.**  
+**See `receipt_protocol.md` for universal receipt specification.**
+
+---
+
+## Core Value Proposition
+
+**AsyncGate is the execution coordinator for long-running work.**
+
+AsyncGate manages the task lifecycle (queue → lease → execute → complete) and coordinates worker execution. Workers execute under AsyncGate's management (lease/heartbeat/complete). Only Principals and DeleGates can queue tasks - Workers execute only.
+
+When work completes, AsyncGate does three critical things:
+
+1. **Receives result pointer from worker** - Worker stores artifact and returns pointer
+2. **Emits receipt with pointer to MemoryGate** - Receipt includes artifact_pointer and artifact_location
+3. **Cleans up task from active queue** - Work is done, state moves to receipt
+
+**AsyncGate does NOT maintain a queryable registry of where things are.** Pointers live in receipts, receipts live in MemoryGate.
+
+This enables:
+
+1. **Durable handoffs** - Pointers in receipts survive session resets
+2. **Idempotence** - Workers can retry without duplicate receipts (dedupe keys)
+3. **Transport flexibility** - Email, blob storage, S3 - all swappable via ResultChannel abstraction
+4. **Complete provenance** - Receipt chains from outcome to origin
+
+**The agent workflow:**
+```
+Agent: queue_task() → AsyncGate
+AsyncGate: emit receipt (task_queued) → MemoryGate
+Worker: lease → execute → complete with pointer → AsyncGate
+AsyncGate: emit receipt (task_complete, includes pointer) → MemoryGate
+Agent: bootstrap → read receipt from MemoryGate → extract pointer → fetch result directly
+```
+
+Workers never email AI directly as their only action. Workers always report back to AsyncGate with the pointer. AsyncGate passes that pointer through in the receipt to MemoryGate. Agents discover pointers by querying MemoryGate, not AsyncGate.
+
+**The difference between "it worked once" and "a system you can trust."**
+
+---
+
+## Critical Architectural Boundary: Workers Execute, DeleGates Delegate
+
+**AsyncGate is the execution envelope, not a delegation layer.**
+
+**The Discriminator:** If a component can create new tasks for other components, it's a DeleGate. If it can only execute what it's given, it's a Worker.
+
+### What Workers Can Do
+
+Workers execute under AsyncGate's lifecycle management:
+
+1. **Lease tasks** from AsyncGate (`POST /workers/lease_task`)
+2. **Report progress** via heartbeats (`POST /workers/heartbeat`)
+3. **Complete tasks** with result pointers (`POST /workers/complete`)
+4. **Fail tasks** with error details (`POST /workers/fail`)
+
+Workers execute internally - they do the work themselves, without sub-delegation.
+
+### What Workers CANNOT Do
+
+Workers cannot use AsyncGate to delegate to other workers:
+
+- ✗ Cannot call `queue_task()` to create tasks for other workers
+- ✗ Cannot decompose their assigned task into subtasks
+- ✗ Cannot route work to other workers
+- ✗ Cannot decide which other worker should do anything
+
+**If a component needs to decompose and route, it's a DeleGate, not a Worker.**
+
+### Who Calls queue_task()?
+
+Only two types of components can create tasks in AsyncGate:
+
+1. **Principal AIs** - Queue tasks for workers to execute
+2. **DeleGates** - Decompose intent and queue steps for workers
+
+Workers accept assigned tasks and execute them. They report completion with result pointers. They do not queue new tasks for other workers.
+
+### Example: Valid vs Invalid Worker Behavior
+
+**✓ Valid Worker (Async Execution):**
+
+```python
+# pdf-indexer-worker leases from AsyncGate
+task = asyncgate.lease_task(worker_id="pdf-indexer-001")
+
+# Worker executes internally (no delegation)
+index_results = index_all_pdfs(task.params['path'])
+
+# Worker stores result and reports pointer
+result_pointer = upload_to_s3(index_results)
+asyncgate.complete_task(
+    task_id=task.task_id,
+    result_pointer=result_pointer
+)
+```
+
+**✗ Invalid Worker (This is actually a DeleGate):**
+
+```python
+# WRONG - Workers cannot delegate to other workers
+def analyze_codebase(repo_path):
+    # This is decomposition and routing - NOT execution!
+    asyncgate.queue_task("scan_files", {"path": repo_path})      # ✗ WRONG
+    asyncgate.queue_task("analyze_complexity", {...})            # ✗ WRONG  
+    asyncgate.queue_task("detect_vulnerabilities", {...})        # ✗ WRONG
+    
+# If your component needs to do this, it's a DeleGate, not a Worker
+```
+
+This boundary keeps AsyncGate focused on execution lifecycle, not task decomposition. Task decomposition is DeleGate's responsibility.
+
+---
+
+## Production-Grade Refinements
+
+This spec incorporates production engineering refinements beyond the initial design:
+
+1. **Receipt-Based Coordination** - AsyncGate emits receipts (with pointers embedded) to MemoryGate at every lifecycle event. Pointers live in receipts, not in AsyncGate's database. Agents query MemoryGate for receipts, extract pointers, fetch results directly. This enables durable handoffs, idempotence, transport flexibility, and complete provenance.
+
+2. **ResultChannel Abstraction** - Transport-agnostic payload delivery. Pointers are opaque strings (`channel:data`) that AsyncGate stores but never interprets. Workers call `channel.put()` → get pointer → report to AsyncGate. AI calls `fetch_task_result()` → AsyncGate routes to channel. Email is default but S3/blob/file/inline all supported via same interface. Adding new channels requires new module, not migration.
+
+3. **Two-Port Architecture** - FastAPI for workers (machine coordination), MCP for AI agents (tool calling), same core
+
+4. **Lease/Claim Protocol** - Worker coordination via `claimed_by_worker_id`, `lease_expires_at`, `run_id` prevents double-execution
+
+5. **Idempotency Keys** - `queue_task()` accepts `idempotency_key` to prevent duplicate submissions
+
+6. **Progress vs Notifications** - Separate `task_progress` table for state tracking vs actionable notifications
+
+7. **Task Type Registry** - `task_types` table with JSON schema validation, per-type defaults, and default ResultChannel selection
+
+8. **Stable Bootstrap Contract** - `async_bootstrap()` returns consistent shape for session initialization
+
+9. **Inbound Webhook Preference** - Postmark/SendGrid webhooks over IMAP polling (lower latency, no state)
+
+10. **Dead Letter + Retention** - Explicit `dead_letter` status, automatic archiving, post-memory-promotion cleanup
+
+11. **Worker SDK** - Python library (asyncgate-worker) makes worker development feel like Celery/RQ
+
+12. **Delivered vs Read Semantics** - `delivered_at` (transport/auto) vs `read_at` (semantic/explicit) prevents "saw it but didn't act" inbox trust issues. Behavioral read: fetching payload = implicit read.
+
+13. **Complete Lifecycle Tracking** - Five timestamps track the full journey: created → delivered → read → fetched → promoted_to_memory. Enables provenance queries, analytics, and auto-archiving when work is complete.
+
+14. **Inbox as Signal, Not Telemetry** - MemoryGate inbox shows only actionable items (complete, failed, milestones), never progress spam. queue_task() returns rich ack with estimated_runtime_seconds and poll_suggestion_seconds to guide AI behavior. Pattern: "queue → continue work → inbox pulls you back when ready." AI only pulls the rope when there's weight.
+
+**Why Two Ports?**
+- **FastAPI** (Port A): Optimized for machine workers - throughput, standard auth, lease semantics, observability
+- **MCP** (Port B): Optimized for AI agents - tool calling interface, conversational task management
+- **Core is protocol-agnostic**: Business logic shared, interfaces expose same functionality differently
+
+**Why ResultChannel Abstraction?**
+- Mix channels by task type (email for small, S3 for big)
+- Add new transports without schema changes
+- Workers choose optimal channel for payload
+- Pointers are stable, opaque, idempotent
+
+These changes move AsyncGate from "good spec" to "production-shaped" without expanding scope.
+
+---
+
+## Core Concept
+
+Autonomous task orchestration system that enables AI agents to fire long-running tasks and retrieve results asynchronously across sessions. Uses **database for active task queue** (reliable) and **receipts to MemoryGate for completed work** (durable).
+
+**Not:** A memory system or pointer registry  
+**Actually:** Task queue + worker coordinator + receipt emitter
+
+**Transport Abstraction:**
+- Workers produce results → store in channel → return pointer to AsyncGate
+- AsyncGate emits receipt (with pointer) to MemoryGate
+- MemoryGate stores receipt
+- Agent queries MemoryGate → gets receipt → extracts pointer → fetches result directly
+- Email is default channel, but S3/blob/file/inline all supported via ResultChannel abstraction
+
+---
+
+## Why Separate from MemoryGate?
+
+**MemoryGate handles:**
+- Semantic memory (observations, patterns, concepts)
+- **Receipt storage (all receipts from all components)**
+- Knowledge persistence across sessions
+- Cross-session continuity
+- Long-term learning
+
+**AsyncGate handles:**
+- Task orchestration and worker coordination
+- Active work queue (tasks being executed)
+- Worker lifecycle (lease, heartbeat, complete)
+- Receipt emission (to MemoryGate)
+
+**They communicate via receipts:**
+- AsyncGate emits receipts → MemoryGate stores them
+- Agents query MemoryGate → get receipts with pointers
+- Agents fetch results directly using pointers
+
+**MemoryGate is the source of truth for receipts and pointers. AsyncGate only knows its active work queue.**
+
+Task results eventually flow into MemoryGate as observations/patterns (via agent decision to promote), but the execution layer stays separate.
+
+---
+
+## ResultChannel Abstraction
+
+AsyncGate is **transport-agnostic**. Workers produce results, AsyncGate stores **pointers**, not blobs.
+
+### The Interface
+
+Every ResultChannel implements a minimal contract:
+
+```python
+class ResultChannel(ABC):
+    @abstractmethod
+    async def put(self, task_id: str, payload: bytes | dict) -> str:
+        """
+        Store payload, return opaque pointer.
+        
+        Returns:
+            result_pointer: Opaque string this channel understands
+                           Format: "channel:pointer_data"
+                           Examples: "email:message-id-xyz@mail.com"
+                                    "s3:bucket/key/path"
+                                    "file:/absolute/path"
+        """
+    
+    @abstractmethod
+    async def get(self, result_pointer: str) -> bytes | dict:
+        """
+        Retrieve payload by pointer.
+        Idempotent - safe to call multiple times.
+        """
+    
+    async def ack(self, result_pointer: str):
+        """
+        Optional: Archive or delete payload.
+        For email: move to archive folder
+        For blob: mark for cleanup
+        For inline: no-op
+        """
+        pass
+    
+    @abstractmethod
+    def capabilities(self) -> dict:
+        """
+        Return channel capabilities:
+        - max_size_bytes
+        - supports_attachments
+        - supports_streaming
+        - retention_days
+        - human_readable (email: True, blob: False)
+        """
+```
+
+### Canonical Pointer Formats
+
+Pointers are opaque strings with channel prefix:
+
+```
+email:<message-id>              # Email message ID
+s3:<bucket>/<key>               # S3/R2/Backblaze object
+blob:<storage_id>/<blob_hash>   # Generic blob storage
+file:<absolute_path>            # Local filesystem
+gist:<gist_id>                  # GitHub gist
+inline:<base64_data>            # Tiny results embedded directly
+http:<url>                      # Generic HTTP resource
+```
+
+**Design rule:** AsyncGate passes pointers through in receipts to MemoryGate, never stores or interprets them. Agents fetch results directly using pointers, not through AsyncGate.
+
+### Channel Selection
+
+Channels can be selected:
+- **By task type** (task_types registry specifies default channel)
+- **By worker** (worker chooses based on result size/format)
+- **By result size** (auto-select blob for large payloads)
+
+Example mixing:
+```python
+# Task type registry specifies default channel
+task_types = {
+    "model_consultation": {"default_channel": "email"},
+    "document_index": {"default_channel": "s3"},
+    "image_batch": {"default_channel": "blob"},
+    "status_check": {"default_channel": "inline"}
+}
+```
+
+### Implementation Registry
+
+```python
+# asyncgate/channels/registry.py
+CHANNELS = {
+    "email": EmailChannel(),
+    "s3": S3Channel(),
+    "blob": BlobChannel(),
+    "file": FileChannel(),
+    "inline": InlineChannel()
+}
+
+# Workers use channels to store results
+async def put_result(task_id, channel_name, payload):
+    channel = CHANNELS[channel_name]
+    pointer = await channel.put(task_id, payload)
+    return pointer
+
+# Agents fetch results directly (not through AsyncGate)
+# Agents have their own channel client library:
+#   pointer = receipt.artifact_pointer  # From MemoryGate
+#   channel_name = receipt.artifact_location
+#   result = await channel_client.fetch(channel_name, pointer)
+```
+
+### Email as First-Class Channel
+
+Email remains special (cheap, human-readable, attachment-friendly) but isn't hardcoded:
+
+```python
+# asyncgate/channels/email.py
+class EmailChannel(ResultChannel):
+    async def put(self, task_id, payload):
+        # Send email with payload
+        msg = await smtp.send(
+            to=get_recipient(task_id),
+            subject=f"Task Results - {task_id}",
+            body=format_payload(payload)
+        )
+        # Return pointer
+        return f"email:{msg.message_id}"
+    
+    async def get(self, result_pointer):
+        message_id = result_pointer.split(':')[1]
+        msg = await imap.fetch(message_id)
+        return parse_payload(msg.body)
+    
+    async def ack(self, result_pointer):
+        message_id = result_pointer.split(':')[1]
+        await imap.move_to_folder(message_id, "Archive/Tasks")
+    
+    def capabilities(self):
+        return {
+            "max_size_bytes": 10 * 1024 * 1024,  # 10MB
+            "supports_attachments": True,
+            "supports_streaming": False,
+            "retention_days": None,  # Email provider dependent
+            "human_readable": True
+        }
+```
+
+### V1 Implementation Path
+
+**Phase 1 (current):** Email only, but use generic vocabulary
+- Schema uses `result_channel` + `result_pointer` (already done)
+- Email-specific code behind `EmailChannel` class
+- Workers return `("email", pointer)` tuples
+- AI tools use `fetch_task_result()` which routes to email
+
+**Phase 2 (future):** Add second channel without migration
+```python
+# New file: asyncgate/channels/s3.py
+class S3Channel(ResultChannel):
+    async def put(self, task_id, payload):
+        key = f"results/{task_id}/{uuid4()}"
+        await s3.upload(bucket, key, payload)
+        return f"s3:{bucket}/{key}"
+    
+    async def get(self, result_pointer):
+        bucket, key = parse_s3_pointer(result_pointer)
+        return await s3.download(bucket, key)
+
+# Register in CHANNELS dict - done
+```
+
+No schema changes needed. Just new module.
+
+**Phase 3 (advanced):** Auto-routing by size
+```python
+async def put_result(task_id, payload):
+    if len(payload) < 1_000_000:  # 1MB
+        return await CHANNELS["email"].put(task_id, payload)
+    else:
+        return await CHANNELS["s3"].put(task_id, payload)
+```
+
+---
+
+## Inbox as Signal, Not Telemetry
+
+**Design principle:** MemoryGate inbox shows **actionable items only**, not progress updates.
+
+### What Appears in Inbox
+
+**YES (signal):**
+- Task complete ✓
+- Task failed ✗
+- Major milestones (if task type specifies)
+- Errors requiring attention
+
+**NO (noise):**
+- "Task queued"
+- "25% complete"
+- "50% complete"  
+- Worker heartbeats
+- Routine progress updates
+
+### AI Workflow Pattern
+
+```python
+# Queue task
+result = queue_task(
+    task_type="document_index",
+    params={"path": "F:/Documents", "recursive": True}
+)
+
+# Result guides behavior:
+{
+    "task_id": "abc-123",
+    "status": "queued",
+    "estimated_runtime_seconds": 3600,        # ~1 hour
+    "poll_suggestion_seconds": 600,           # Check in 10 min if impatient
+    "inbox_on_complete": true                 # Receipt will appear when done
+}
+
+# AI continues work or ends session
+# No spam in inbox during task execution
+
+# Later session (when task completes):
+bootstrap = memory_bootstrap("Kee", "Claude")
+# → Inbox shows: "Document indexing complete (10,000 files)"
+
+# AI pulls the rope only when there's weight
+receipt = read_inbox_receipt(inbox_items[0])
+result = fetch_task_result(receipt.metadata['task_id'])
+```
+
+### Task Type Configuration
+
+Task types specify timing guidance that queue_task() returns:
+
+```sql
+INSERT INTO task_types VALUES
+    ('model_consultation', 
+     'Consult multiple AI models and synthesize responses',
+     '{"properties": {"prompt": "string", "models": "array"}}',
+     5,  -- default_priority
+     3,  -- default_max_retries
+     600,  -- default_timeout_seconds
+     30,  -- default_retention_days
+     'email',  -- default_result_channel
+     120,  -- estimated_runtime_seconds (2 minutes)
+     60,   -- poll_suggestion_seconds (check in 1 min if impatient)
+     10485760,  -- max_payload_bytes
+     true),  -- enabled
+     
+    ('document_index',
+     'Index documents and generate embeddings',
+     '{"properties": {"path": "string", "recursive": "boolean"}}',
+     3,  -- lower priority (background work)
+     1,  -- fewer retries (expensive)
+     7200,  -- 2 hour timeout
+     30,
+     's3',  -- large result → blob storage
+     3600,  -- estimated 1 hour
+     600,   -- check in 10 min if impatient
+     null,  -- unlimited payload size (goes to S3)
+     true),
+     
+    ('image_analysis',
+     'Batch analyze images',
+     '{"properties": {"directory": "string", "operations": "array"}}',
+     5,
+     3,
+     1800,  -- 30 min timeout
+     30,
+     'blob',
+     900,  -- estimated 15 min
+     300,  -- check in 5 min
+     52428800,  -- 50MB max
+     true);
+```
+
+### Polling Guidance
+
+`queue_task()` returns guidance, but **inbox is preferred**:
+
+```python
+# Good: Let inbox notify you
+task_id = queue_task(...)
+# Continue work, get notified when done
+
+# Acceptable: Poll if time-sensitive
+task_id = queue_task(...)
+if task_urgent:
+    await asyncio.sleep(poll_suggestion_seconds)
+    status = check_task_status(task_id)
+
+# Bad: Spam polling
+task_id = queue_task(...)
+while True:  # DON'T DO THIS
+    await asyncio.sleep(5)
+    status = check_task_status(task_id)
+    if status.complete: break
+```
+
+**The pattern:** Queue → Continue work → Inbox pulls you back when ready.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────┐
+│            AI Agent (Kee)                       │
+│  ┌──────────────┐        ┌──────────────┐      │
+│  │  MemoryGate  │        │  AsyncGate   │      │
+│  │  MCP Tools   │        │  MCP Tools   │      │  ← Port B (Agent Interface)
+│  └──────────────┘        └──────────────┘      │
+└──────────┬──────────────────────┬───────────────┘
+           │                      │
+           ▼                      ▼
+    ┌─────────────┐        ┌─────────────┐
+    │ MemoryGate  │◄──────►│ AsyncGate   │
+    │  Database   │        │    Core     │
+    │  (PG+vector)│        │  (PG)       │
+    └─────────────┘        └──────┬──────┘
+                                  │
+                    ┌─────────────┼─────────────┐
+                    ▼             ▼             ▼
+              ┌──────────┐  ┌─────────┐  ┌──────────┐
+              │  Email   │  │Background│  │ External │
+              │  System  │  │ Workers  │  │   APIs   │
+              │(SMTP/IMAP│  │(FastAPI) │  │(OpenRouter│
+              └──────────┘  └─────────┘  └──────────┘
+                                  ▲
+                                  │ Port A (Worker Interface)
+                            HTTP/FastAPI
+```
+
+**Two Ports, One Core:**
+- **Port A (FastAPI)**: Worker coordination - leases, heartbeats, completion
+- **Port B (MCP)**: AI agent operations - queue tasks, check status, notifications
+
+---
+
+## Database Schema
+
+### Core Tables
+
+```sql
+-- Task registry and status tracking
+CREATE TABLE tasks (
+    id SERIAL PRIMARY KEY,
+    task_id VARCHAR(100) UNIQUE NOT NULL,  -- UUID for external reference
+    task_type VARCHAR(50) NOT NULL,         -- 'model_consultation', 'document_index', etc
+    recipient_ai VARCHAR(50) NOT NULL,      -- 'Kee', 'Hexy', etc
+    status VARCHAR(20) NOT NULL,            -- 'queued', 'running', 'complete', 'failed', 'dead_letter'
+    
+    -- Configuration
+    params JSONB,                           -- Task parameters
+    priority INTEGER DEFAULT 5,             -- 1-10 priority
+    idempotency_key VARCHAR(200),           -- Prevent duplicate submissions
+    
+    -- Worker coordination (lease protocol)
+    claimed_by_worker_id VARCHAR(100),      -- Which worker owns this task
+    lease_expires_at TIMESTAMP,             -- When lease expires (allows reclaim)
+    run_id UUID,                            -- Unique per execution attempt
+    
+    -- Timing
+    created_at TIMESTAMP DEFAULT NOW(),
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    
+    -- Results (abstracted - email is one implementation)
+    result_channel VARCHAR(20),             -- 'email', 'blob', 's3', 'none'
+    result_pointer VARCHAR(500),            -- message_id, s3://path, etc
+    result_checksum VARCHAR(64),            -- Optional integrity check
+    summary TEXT,                           -- Brief summary for notifications
+    metadata JSONB,                         -- Small stats/info
+    
+    -- Error handling
+    error_message TEXT,
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+    retryable BOOLEAN DEFAULT TRUE,
+    
+    -- Retention
+    retention_days INTEGER DEFAULT 30,      -- Auto-archive after N days
+    
+    UNIQUE(recipient_ai, idempotency_key) WHERE idempotency_key IS NOT NULL
+);
+
+-- Email tracking (separate from task lifecycle)
+CREATE TABLE email_queue (
+    id SERIAL PRIMARY KEY,
+    task_id VARCHAR(100) REFERENCES tasks(task_id),
+    
+    to_address VARCHAR(200) NOT NULL,
+    from_address VARCHAR(200),
+    subject VARCHAR(500) NOT NULL,
+    body TEXT,
+    attachments JSONB,                      -- [{filename, path, size}, ...]
+    
+    status VARCHAR(20),                     -- 'pending', 'sent', 'delivered', 'failed'
+    sent_at TIMESTAMP,
+    message_id VARCHAR(200),                -- Email Message-ID for tracking
+    
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Notification audit trail (debugging/internal only)
+-- NOT the primary inbox - MemoryGate handles inbox delivery via receipts
+CREATE TABLE notifications (
+    id SERIAL PRIMARY KEY,
+    recipient_ai VARCHAR(50) NOT NULL,
+    task_id VARCHAR(100) REFERENCES tasks(task_id),
+    
+    -- Receipt posting tracking
+    receipt_posted_to_memorygate BOOLEAN DEFAULT FALSE,
+    receipt_id VARCHAR(100),                -- MemoryGate receipt ID
+    receipt_posted_at TIMESTAMP,
+    receipt_post_error TEXT,                -- If posting failed
+    
+    notification_type VARCHAR(50),          -- 'task_complete', 'task_failed'
+    summary TEXT NOT NULL,
+    
+    -- Lifecycle (for local audit trail)
+    created_at TIMESTAMP DEFAULT NOW(),
+    archived_at TIMESTAMP,                  -- Can archive after confirmed delivery
+    
+    INDEX idx_receipt_tracking (receipt_posted_to_memorygate, receipt_posted_at),
+    INDEX idx_failed_posts (receipt_posted_to_memorygate) WHERE receipt_posted_to_memorygate = FALSE
+);
+
+-- Note: This table is for AsyncGate internal debugging only
+-- AI agents interact with MemoryGate inbox receipts, not this table
+
+-- Task progress tracking (separate from notifications)
+CREATE TABLE task_progress (
+    id SERIAL PRIMARY KEY,
+    task_id VARCHAR(100) REFERENCES tasks(task_id),
+    run_id UUID NOT NULL,
+    
+    percent FLOAT CHECK (percent >= 0 AND percent <= 100),
+    message TEXT,
+    updated_at TIMESTAMP DEFAULT NOW(),
+    
+    INDEX idx_task_progress (task_id, updated_at DESC)
+);
+
+-- Task type registry (validation and defaults)
+CREATE TABLE task_types (
+    id SERIAL PRIMARY KEY,
+    task_type VARCHAR(50) UNIQUE NOT NULL,
+    
+    description TEXT,
+    params_schema JSONB,                    -- JSON schema for validation
+    
+    -- Defaults
+    default_priority INTEGER DEFAULT 5,
+    default_max_retries INTEGER DEFAULT 3,
+    default_timeout_seconds INTEGER DEFAULT 3600,
+    default_retention_days INTEGER DEFAULT 30,
+    default_result_channel VARCHAR(50) DEFAULT 'email',
+    
+    -- AI guidance (returned in queue_task response)
+    estimated_runtime_seconds INTEGER,      -- Expected duration
+    poll_suggestion_seconds INTEGER,        -- "Check back in N seconds" if impatient
+    
+    max_payload_bytes BIGINT DEFAULT 10485760,  -- 10MB default
+    
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Worker registry (what background processes exist)
+CREATE TABLE workers (
+    id SERIAL PRIMARY KEY,
+    worker_id VARCHAR(100) UNIQUE NOT NULL,
+    worker_type VARCHAR(50),                -- 'model_api', 'file_processor', 'indexer'
+    
+    status VARCHAR(20),                     -- 'idle', 'busy', 'offline'
+    capabilities JSONB,                     -- What task types this worker handles
+    
+    last_heartbeat TIMESTAMP,
+    started_at TIMESTAMP,
+    
+    config JSONB                            -- Worker-specific configuration
+);
+
+-- Task execution log (for debugging and patterns)
+CREATE TABLE execution_log (
+    id SERIAL PRIMARY KEY,
+    task_id VARCHAR(100) REFERENCES tasks(task_id),
+    
+    timestamp TIMESTAMP DEFAULT NOW(),
+    log_level VARCHAR(20),                  -- 'debug', 'info', 'warning', 'error'
+    message TEXT,
+    context JSONB
+);
+```
+
+### Indexes
+
+```sql
+CREATE INDEX idx_tasks_recipient_status ON tasks(recipient_ai, status);
+CREATE INDEX idx_tasks_status_created ON tasks(status, created_at);
+CREATE INDEX idx_tasks_lease_expires ON tasks(lease_expires_at) WHERE status = 'running';
+CREATE INDEX idx_notifications_unread ON notifications(recipient_ai, read_at) WHERE read_at IS NULL;
+CREATE INDEX idx_email_queue_status ON email_queue(status);
+CREATE INDEX idx_workers_status ON workers(status, worker_type);
+CREATE UNIQUE INDEX idx_idempotency ON tasks(recipient_ai, idempotency_key) WHERE idempotency_key IS NOT NULL;
+```
+
+---
+
+## Worker Coordination API
+
+**Workers use HTTP endpoints (not MCP) for task coordination:**
+
+These are server-to-server APIs, not exposed to AI agents.
+
+### Lease Protocol
+
+```python
+POST /workers/lease_task
+{
+    "worker_id": "openrouter-001",
+    "task_types": ["model_consultation", "embeddings"],
+    "lease_seconds": 300
+}
+
+Response:
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "task_type": "model_consultation",
+    "params": {...},
+    "lease_expires_at": "2026-01-03T22:15:00Z"
+}
+
+# Or if no tasks available:
+{
+    "task_id": null,
+    "message": "No tasks available"
+}
+```
+
+### Heartbeat
+
+```python
+POST /workers/heartbeat
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "progress_percent": 45.5,
+    "progress_message": "Processed 450/1000 files",
+    "extend_lease_seconds": 300  # Optional: extend current lease
+}
+
+Response:
+{
+    "status": "ok",
+    "lease_expires_at": "2026-01-03T22:20:00Z"
+}
+```
+
+### Complete
+
+```python
+POST /workers/complete
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "summary": "Consulted 3 models successfully",
+    "result_channel": "email",
+    "result_pointer": "message-id-xyz@mail.com",
+    "result_checksum": "sha256:abcdef...",
+    "metadata": {
+        "models_queried": 3,
+        "total_tokens": 1500
+    }
+}
+
+Response:
+{
+    "status": "completed",
+    "notification_sent": true
+}
+```
+
+### Fail
+
+```python
+POST /workers/fail
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "error_message": "OpenRouter API timeout",
+    "retryable": true,
+    "metadata": {
+        "http_status": 504,
+        "attempts": 3
+    }
+}
+
+Response:
+{
+    "status": "failed",
+    "will_retry": true,
+    "retry_scheduled_at": "2026-01-03T22:30:00Z"
+}
+```
+
+### Lease Expiry Handling
+
+Background job runs every minute:
+```python
+def reclaim_expired_leases():
+    """
+    Find tasks with expired leases and reset to queued.
+    Workers that don't heartbeat lose their claim.
+    """
+    db.execute("""
+        UPDATE tasks
+        SET status = 'queued',
+            claimed_by_worker_id = NULL,
+            lease_expires_at = NULL,
+            run_id = NULL
+        WHERE status = 'running'
+          AND lease_expires_at < NOW()
+    """)
+```
+
+---
+
+## Worker Interface (Port A - FastAPI)
+
+**For machine workers, not AI agents.** Workers use FastAPI for throughput, clean lease semantics, standard auth, and observability.
+
+### Task Envelope Contract
+
+All worker endpoints use a shared `TaskEnvelope` structure:
+
+```python
+class TaskEnvelope:
+    task_id: str
+    run_id: str  # UUID, unique per execution attempt
+    task_type: str
+    params: dict
+    priority: int
+    lease_expires_at: str  # ISO timestamp
+    metadata: dict | None
+```
+
+### FastAPI Endpoints
+
+**Authentication:** API key or JWT in `Authorization` header.
+
+#### POST /worker/lease
+
+Request a task to work on.
+
+```python
+POST /worker/lease
+Headers:
+    Authorization: Bearer <worker_api_key>
+Body:
+{
+    "worker_id": "openrouter-001",
+    "task_types": ["model_consultation", "embeddings"],
+    "lease_seconds": 300
+}
+
+Response (200 OK):
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "task_type": "model_consultation",
+    "params": {
+        "prompt": "...",
+        "models": ["gpt-4o", "claude-opus-4"]
+    },
+    "priority": 8,
+    "lease_expires_at": "2026-01-03T22:15:00Z",
+    "metadata": {}
+}
+
+Response (204 No Content):
+# No tasks available
+```
+
+#### POST /worker/heartbeat
+
+Extend lease and report progress.
+
+```python
+POST /worker/heartbeat
+Headers:
+    Authorization: Bearer <worker_api_key>
+Body:
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "progress_percent": 45.5,
+    "progress_message": "Processed 450/1000 files",
+    "extend_lease_seconds": 300
+}
+
+Response (200 OK):
+{
+    "status": "ok",
+    "lease_expires_at": "2026-01-03T22:20:00Z"
+}
+
+Response (409 Conflict):
+{
+    "error": "lease_expired",
+    "message": "Task has been reclaimed"
+}
+```
+
+#### POST /worker/complete
+
+Mark task successful. **Workers MUST report back with result pointer** - never just email and exit.
+
+**The Contract (Source of Truth for Pointers):**
+Workers provide complete provenance:
+- task_id, run_id - Which task, which execution
+- summary - Human-readable completion message
+- result_channel - Where the payload lives (email/blob/s3/local)
+- result_pointer - How to retrieve it (message_id/URI/path)
+- result_checksum - Optional integrity verification
+- metadata - Size, format, processing details
+
+Email can happen (and should for email channel), but **reporting the pointer to AsyncGate is mandatory**. This makes AsyncGate the authoritative source for "where did that result go?"
+
+```python
+POST /worker/complete
+Headers:
+    Authorization: Bearer <worker_api_key>
+Body:
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "summary": "Consulted 3 models successfully",
+    "result_channel": "email",
+    "result_pointer": "message-id-xyz@mail.com",  # REQUIRED
+    "result_checksum": "sha256:abcdef...",
+    "metadata": {
+        "models_queried": 3,
+        "total_tokens": 1500,
+        "duration_seconds": 12.5,
+        "payload_size_bytes": 45000
+    }
+}
+
+Response (200 OK):
+{
+    "status": "completed",
+    "notification_sent": true,
+    "notification_id": 456
+}
+```
+
+#### POST /worker/fail
+
+Mark task failed.
+
+```python
+POST /worker/fail
+Headers:
+    Authorization: Bearer <worker_api_key>
+Body:
+{
+    "task_id": "abc-123",
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "error_message": "OpenRouter API timeout after 3 attempts",
+    "retryable": true,
+    "metadata": {
+        "http_status": 504,
+        "attempts": 3,
+        "last_error": "Connection timeout"
+    }
+}
+
+Response (200 OK):
+{
+    "status": "failed",
+    "will_retry": true,
+    "retry_scheduled_at": "2026-01-03T22:30:00Z"
+}
+
+Response (when retries exhausted):
+{
+    "status": "dead_letter",
+    "will_retry": false,
+    "notification_sent": true
+}
+```
+
+### Authentication
+
+```python
+# Worker API key generation
+POST /admin/workers/create_key
+{
+    "worker_id": "openrouter-001",
+    "capabilities": ["model_consultation", "embeddings"],
+    "expires_at": "2027-01-03T00:00:00Z"  # Optional
+}
+
+Response:
+{
+    "api_key": "agw_abc123...",
+    "worker_id": "openrouter-001"
+}
+
+# Workers include in requests:
+Authorization: Bearer agw_abc123...
+```
+
+---
+
+## Worker SDK
+
+Python library for building workers. Makes worker development feel like Celery/RQ without the message bus.
+
+### Installation
+
+```bash
+pip install asyncgate-worker
+```
+
+### Basic Usage
+
+```python
+from asyncgate_worker import TaskRunner, AsyncGateClient
+
+# Initialize client
+client = AsyncGateClient(
+    base_url="https://asyncgate.memorygate.ai",
+    api_key="agw_abc123..."
+)
+
+# Create runner
+runner = TaskRunner(
+    client=client,
+    worker_id="openrouter-001",
+    capabilities=["model_consultation", "embeddings"]
+)
+
+# Register handler
+@runner.task("model_consultation")
+def handle_consultation(task_envelope):
+    """
+    Handler receives TaskEnvelope with:
+    - task_id, run_id, task_type
+    - params (validated against task_type schema)
+    - lease_expires_at
+    """
+    prompt = task_envelope.params["prompt"]
+    models = task_envelope.params["models"]
+    
+    results = {}
+    for model in models:
+        response = openrouter_client.complete(model, prompt)
+        results[model] = response
+        
+        # Optional: report progress
+        runner.progress(
+            percent=(len(results) / len(models)) * 100,
+            message=f"Completed {model}"
+        )
+    
+    # Return result data
+    # Runner handles completion, email sending, etc
+    return {
+        "models": results,
+        "synthesis": synthesize_responses(results)
+    }
+
+# Run worker loop
+runner.run_forever(
+    poll_interval=10,  # seconds
+    lease_seconds=300
+)
+```
+
+### Advanced Features
+
+```python
+# Custom result handling
+@runner.task("document_index", result_channel="email")
+def handle_indexing(task):
+    index_data = index_documents(task.params["path"])
+    
+    # Runner emails result automatically
+    return {
+        "index": index_data,
+        "stats": {...}
+    }
+
+# Error handling with retry control
+@runner.task("flaky_operation")
+def handle_flaky(task):
+    try:
+        result = do_something_flaky()
+        return result
+    except TransientError as e:
+        # Retryable error
+        raise runner.RetryableError(str(e))
+    except PermanentError as e:
+        # Don't retry
+        raise runner.FatalError(str(e))
+
+# Manual lease extension for long tasks
+@runner.task("long_running", lease_seconds=600)
+def handle_long(task):
+    for chunk in process_large_dataset():
+        # Automatically extends lease
+        runner.heartbeat(
+            progress_percent=...,
+            extend_lease_seconds=300
+        )
+        process(chunk)
+    return results
+```
+
+### SDK Architecture
+
+```python
+# asyncgate_worker/client.py
+class AsyncGateClient:
+    def __init__(self, base_url, api_key):
+        self.base_url = base_url
+        self.api_key = api_key
+        self.session = httpx.AsyncClient()
+    
+    async def lease_task(self, worker_id, task_types, lease_seconds):
+        """POST /worker/lease"""
+        
+    async def heartbeat(self, task_id, run_id, progress_percent, ...):
+        """POST /worker/heartbeat"""
+        
+    async def complete_task(self, task_id, run_id, result_data, ...):
+        """POST /worker/complete"""
+        
+    async def fail_task(self, task_id, run_id, error, retryable):
+        """POST /worker/fail"""
+
+# asyncgate_worker/runner.py
+class TaskRunner:
+    def __init__(self, client, worker_id, capabilities):
+        self.client = client
+        self.handlers = {}
+        self.current_task = None
+    
+    def task(self, task_type, **options):
+        """Decorator to register task handler"""
+        def decorator(func):
+            self.handlers[task_type] = (func, options)
+            return func
+        return decorator
+    
+    async def run_forever(self, poll_interval=10, lease_seconds=300):
+        """Main worker loop"""
+        while True:
+            envelope = await self.client.lease_task(
+                self.worker_id,
+                list(self.handlers.keys()),
+                lease_seconds
+            )
+            
+            if envelope:
+                await self._execute(envelope)
+            else:
+                await asyncio.sleep(poll_interval)
+    
+    async def _execute(self, envelope):
+        """Execute task with automatic completion/failure"""
+        handler, options = self.handlers[envelope.task_type]
+        
+        try:
+            result = await handler(envelope)
+            await self._complete(envelope, result, options)
+        except RetryableError as e:
+            await self.client.fail_task(
+                envelope.task_id,
+                envelope.run_id,
+                str(e),
+                retryable=True
+            )
+        except Exception as e:
+            await self.client.fail_task(
+                envelope.task_id,
+                envelope.run_id,
+                str(e),
+                retryable=False
+            )
+    
+    async def _complete(self, envelope, result, options):
+        """Handle result storage and completion"""
+        channel = options.get("result_channel", "email")
+        
+        if channel == "email":
+            # Send email with results
+            pointer = await self._send_result_email(envelope, result)
+        
+        await self.client.complete_task(
+            envelope.task_id,
+            envelope.run_id,
+            summary=options.get("summary"),
+            result_channel=channel,
+            result_pointer=pointer
+        )
+
+# asyncgate_worker/helpers.py
+class ResultWriter:
+    """Helper for writing results to different channels"""
+    
+    @staticmethod
+    async def email(recipient, subject, body, attachments=None):
+        """Send result email, return message_id"""
+        
+    @staticmethod
+    async def blob(data, checksum=True):
+        """Store in blob storage, return URI"""
+```
+
+### Worker SDK Features
+
+- ✅ Automatic lease renewal via heartbeats
+- ✅ Structured logging (task_id, run_id in all logs)
+- ✅ Built-in retries with exponential backoff
+- ✅ Progress reporting
+- ✅ Result channel abstraction (email, blob, S3)
+- ✅ Checksum generation
+- ✅ Error categorization (retryable vs fatal)
+- ✅ Graceful shutdown
+- ✅ Metrics emission (Prometheus compatible)
+
+---
+
+## MCP Worker Shim (Optional)
+
+For scenarios where the worker is an AI agent in an MCP environment that can't easily make HTTP calls.
+
+**Use case:** AI agent needs to act as worker, but only has MCP tool access.
+
+### MCP Worker Tools
+
+Separate namespace from main AI tools to avoid confusion.
+
+```python
+@mcp.tool()
+def worker_lease_task(worker_id: str, task_types: list[str], lease_seconds: int):
+    """
+    Lease a task (worker interface via MCP).
+    Internally calls core_lease_task(), same as FastAPI endpoint.
+    """
+
+@mcp.tool()
+def worker_heartbeat_task(task_id: str, run_id: str, progress_percent: float, extend_lease_seconds: int):
+    """Report progress and extend lease (worker interface)"""
+
+@mcp.tool()
+def worker_complete_task(task_id: str, run_id: str, result_channel: str, result_pointer: str, summary: str):
+    """Mark task complete (worker interface)"""
+
+@mcp.tool()
+def worker_fail_task(task_id: str, run_id: str, error_message: str, retryable: bool):
+    """Mark task failed (worker interface)"""
+```
+
+**Important:** These tools are separate from the AI-facing tools (`queue_task`, `check_task_status`, etc). Workers use `worker_*` tools, AI agents use regular tools.
+
+### When to Use MCP Worker Shim
+
+**Use FastAPI (default):**
+- Python/Node/Go workers
+- Any environment with HTTP client
+- Performance-sensitive workers
+- Production deployments
+
+**Use MCP shim only when:**
+- Worker IS an AI agent
+- Running in MCP-only environment
+- Can't make HTTP calls easily
+- Prototyping/development
+
+---
+
+## Core Architecture (Protocol Agnostic)
+
+AsyncGate core implements business logic independent of interface protocol.
+
+```python
+# asyncgate/core/tasks.py
+async def core_lease_task(worker_id, task_types, lease_seconds):
+    """
+    Protocol-agnostic task leasing.
+    Called by both FastAPI endpoint and MCP tool.
+    """
+    task = await db.fetch_one("""
+        UPDATE tasks
+        SET status = 'running',
+            claimed_by_worker_id = :worker_id,
+            lease_expires_at = NOW() + :lease_seconds * INTERVAL '1 second',
+            run_id = gen_random_uuid(),
+            started_at = NOW()
+        WHERE task_id IN (
+            SELECT task_id FROM tasks
+            WHERE status = 'queued'
+              AND task_type = ANY(:task_types)
+            ORDER BY priority DESC, created_at ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING *
+    """, {
+        "worker_id": worker_id,
+        "task_types": task_types,
+        "lease_seconds": lease_seconds
+    })
+    
+    return TaskEnvelope(**task) if task else None
+
+async def core_complete_task(task_id, run_id, summary, result_channel, result_pointer, metadata):
+    """Protocol-agnostic task completion"""
+    # Verify run_id matches (prevent stale completion)
+    # Update task status
+    # Create notification
+    # Send email if needed
+
+async def core_fail_task(task_id, run_id, error, retryable, metadata):
+    """Protocol-agnostic task failure"""
+    # Verify run_id
+    # Handle retries or dead letter
+    # Create notification
+
+# Exposed via both interfaces:
+
+# FastAPI route
+@app.post("/worker/lease")
+async def api_lease_task(req: LeaseRequest):
+    envelope = await core_lease_task(
+        req.worker_id,
+        req.task_types,
+        req.lease_seconds
+    )
+    return envelope if envelope else Response(status_code=204)
+
+# MCP tool
+@mcp.tool()
+**Benefits:**
+- Single source of truth for business logic
+- Both interfaces stay in sync
+- Easy to test core independently
+- Can add new interfaces (gRPC, GraphQL) easily
+
+---
+
+## MCP Tools (AI Agent Interface - Port B)
+
+AsyncGate exposes task management and result retrieval via MCP. Inbox delivery is handled by MemoryGate.
+
+**What AI agents do:**
+1. Call `memory_bootstrap()` → see AsyncGate receipts in MemoryGate inbox
+2. Call AsyncGate tools to manage tasks and fetch results
+3. Store synthesized results back in MemoryGate permanent memory
+
+**AsyncGate tools focus on:**
+- Task lifecycle (queue, status, cancel, list)
+- Result retrieval (fetch from result channels)
+- NOT inbox management (that's MemoryGate's job)
+
+### Task Management
+
+```python
+@mcp.tool()
+def queue_task(
+    task_type: str,
+    params: dict,
+    priority: int = 5,
+    recipient_ai: str = None,  # Defaults to current AI
+    idempotency_key: str | None = None
+):
+    """
+    Queue a new async task.
+    
+    Args:
+        task_type: Type of task ('model_consultation', 'document_index', etc)
+        params: Task-specific parameters (validated against task_type schema)
+        priority: 1-10 (10 = highest)
+        recipient_ai: Which AI should receive completion receipt (defaults to caller)
+        idempotency_key: Optional key to prevent duplicate submissions
+    
+    Returns:
+        task_id: Reference for checking status
+        status: "queued" or "duplicate"
+        is_duplicate: bool (true if idempotency_key matched existing task)
+        estimated_runtime_seconds: Expected duration (from task type registry)
+        poll_suggestion_seconds: When to check if impatient (e.g., 600 = "check in 10 min")
+        inbox_on_complete: bool (true - receipt will appear in MemoryGate inbox when done)
+        
+    Example response:
+        {
+            "task_id": "abc-123",
+            "status": "queued",
+            "is_duplicate": false,
+            "estimated_runtime_seconds": 600,
+            "poll_suggestion_seconds": 300,
+            "inbox_on_complete": true
+        }
+        
+    Guidance:
+        - You'll get a MemoryGate inbox receipt when the task completes/fails
+        - No need to poll unless time-sensitive
+        - If you must poll, wait at least poll_suggestion_seconds
+        - Inbox only shows actionable items (complete/failed), not progress updates
+    """
+
+@mcp.tool()
+def check_task_status(task_id: str):
+    """
+    Get current status of a task.
+    
+    Returns:
+        - status: queued/running/complete/failed/dead_letter
+        - progress_percent: Current progress (if available)
+        - progress_message: Human-readable progress
+        - started_at, completed_at: Timestamps
+        - retry_count, can_retry: Retry information
+    """
+
+@mcp.tool()
+def get_task_progress(task_id: str):
+    """
+    Get detailed progress history for a task.
+    Returns list of progress updates with timestamps.
+    """
+
+@mcp.tool()
+def cancel_task(task_id: str):
+    """Cancel a queued or running task"""
+
+@mcp.tool()
+def list_active_tasks(task_type: str = None, recipient_ai: str = None):
+    """
+    List all active tasks.
+    
+    Args:
+        task_type: Filter by task type (optional)
+        recipient_ai: Filter by recipient (defaults to current AI)
+    
+    Returns:
+        [{task_id, type, status, priority, created_at, progress}, ...]
+    """
+```
+
+### Result Retrieval
+
+Fetch task results from ResultChannels. These tools are channel-agnostic and route to the appropriate storage backend.
+
+```python
+@mcp.tool()
+def fetch_task_result(task_id: str):
+    """
+    Fetch results for completed task (channel-agnostic).
+    
+    Dispatches to appropriate handler based on result_channel.
+    
+    Args:
+        task_id: Task to fetch results for
+    
+    Returns:
+        - channel: email/blob/s3/file/inline
+        - content: Parsed result data
+        - checksum_valid: bool (if checksum provided)
+        - metadata: Task metadata (type, params, etc)
+        - result_pointer: Original pointer for reference
+    """
+    # Implementation:
+    # 1. Get task from DB
+    # 2. Get result_channel and result_pointer
+    # 3. Call appropriate channel.get(result_pointer)
+    # 4. Verify checksum if provided
+    # 5. Return parsed result
+
+@mcp.tool()
+def fetch_task_email(task_id: str):
+    """
+    Fetch email associated with task results (email channel convenience method).
+    
+    Parses JSON from body, handles attachments.
+    
+    Returns:
+        - subject: Email subject
+        - body: Parsed content (JSON if applicable)
+        - attachments: [{filename, content}, ...]
+        - message_id: Original message ID
+    """
+
+@mcp.tool()
+def archive_task_result(task_id: str):
+    """
+    Archive task result payload.
+    
+    Calls result_channel.ack(result_pointer) to archive/delete payload.
+    For email: moves to archive folder
+    For blob: marks for cleanup
+    For inline: no-op
+    """
+
+@mcp.tool()
+def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    attachments: list = None,
+    archive_copy: bool = True
+):
+    """
+    Send email (for cross-AI communication or notifications).
+    
+    Args:
+        to: Recipient email (e.g., "hexy@memorygate.ai")
+        subject: Email subject
+        body: Email body (text or JSON)
+        attachments: Optional file attachments
+        archive_copy: Keep copy in sent folder
+    
+    Returns:
+        message_id: Sent email message ID
+    """
+```
+
+### Memory Integration
+
+```python
+@mcp.tool()
+def store_task_result_in_memory(
+    task_id: str,
+    as_observation: bool = True,
+    domain: str = None
+):
+    """
+    Store task results in MemoryGate permanent memory.
+    
+    Fetches task result, synthesizes/processes it, stores in MemoryGate.
+    This completes the async work loop: task → result → permanent knowledge.
+    
+    Args:
+        task_id: Which task to pull results from
+        as_observation: Store as observation vs pattern
+        domain: MemoryGate domain classification (defaults to task_type)
+    
+    Returns:
+        - memory_id: ID of stored observation/pattern in MemoryGate
+        - result_archived: bool (if result payload was also archived)
+    """
+    # Implementation:
+    # 1. Fetch task result via fetch_task_result()
+    # 2. Process/synthesize result
+    # 3. Call MemoryGate memory_store() or memory_update_pattern()
+    # 4. Optionally archive result payload
+    # 5. MemoryGate inbox receipt auto-archives when promoted
+```
+
+---
+
+## Notification Lifecycle (Now in MemoryGate)
+
+**Important:** AsyncGate no longer manages the notification inbox. MemoryGate handles all inbox delivery via receipts.
+
+**AsyncGate's role:**
+- Post receipt to MemoryGate when task completes
+- Track receipt posting in local audit trail (for debugging)
+- Retry failed receipt posts
+
+**MemoryGate's role:**
+- Store inbox receipts
+- Surface receipts in memory_bootstrap()
+- Track delivered/read/fetched/promoted lifecycle
+- Archive receipts when work is complete
+
+**AI workflow:**
+1. Call `memory_bootstrap()` → see AsyncGate receipts in unified inbox
+2. Read receipt → get task_id and result_pointer from metadata
+3. Call `asyncgate.fetch_task_result(task_id)` → get payload
+4. Process and synthesize result
+5. Call `memory_store()` → permanent storage
+6. MemoryGate auto-archives receipt (promoted_to_memory_at set)
+
+See `memorygate_inbox_receipt_extension.md` for full MemoryGate inbox specification.
+
+---
+
+## Storage Decision Tree
+
+**Critical distinction:** Transport-level delivery vs semantic-level read vs provenance tracking.
+
+AsyncGate tracks the complete lifecycle of async work through five timestamps:
+
+**1. created_at** - Notification generated (task complete/failed)
+
+**2. delivered_at (Transport Level):**
+- Auto-set when bootstrap returns notification to AI
+- Purely transport-level - "AsyncGate handed this to you"
+- Increments `delivery_count` (tracks redelivery)
+- Prevents notification from being lost if AI session crashes
+
+**3. read_at (Semantic Level):**
+- Set when AI explicitly acts on notification
+- Semantic-level - "I acknowledged this and made a decision"
+- Two ways to mark as read:
+  1. **Explicit**: Call `read_notification(id)` - direct acknowledgment
+  2. **Behavioral**: Call `fetch_task_result(task_id)` - fetching payload implies read
+
+**4. fetched_at (Payload Retrieval):**
+- Set when AI retrieves the actual result payload
+- Tracks that AI accessed the work artifact, not just the notification
+- Enables analytics: "how long between notification and action?"
+
+**5. promoted_to_memory_at (Permanent Storage):**
+- Set when result is stored in MemoryGate
+- Closes the loop: async work → result → permanent knowledge
+- Enables auto-archiving: promoted items can be hidden from inbox
+
+**Why this matters:**
+```
+Bad (auto-mark read on delivery):
+- Bootstrap returns 10 notifications
+- AI gets distracted, crashes, or moves on
+- All 10 now marked "read" even though nothing happened
+- Trust in inbox broken
+
+Good (separate delivered/read/fetched/promoted):
+- Bootstrap returns 10 notifications, marks delivered
+- AI reads 3, fetches 2, promotes 1 → all tracked independently
+- Session ends with 7 still unread
+- Next session: 7 unread items still visible
+- Inbox remains trustworthy
+- Full provenance: when did AI see it, fetch it, use it?
+```
+
+**Auto-archiving on promotion:**
+When AI stores result in MemoryGate, the notification can auto-archive:
+- Work is done (result preserved in permanent memory)
+- Notification no longer needed in active inbox
+- Still retained for debugging/audit
+- Prevents inbox clutter
+
+**Retention:**
+- Delivered but unread: Stay visible in bootstrap (max 10 shown)
+- Read but not fetched: Available in history
+- Fetched but not promoted: Track incomplete workflows
+- Promoted: Auto-archived (optional), retained for debugging
+- Never purged automatically (tiny metadata, debugging goldmine)
+
+**Query patterns:**
+```sql
+-- Unread notifications (what bootstrap returns)
+WHERE read_at IS NULL AND archived_at IS NULL
+
+-- Delivered but not acted on (debugging)
+WHERE delivered_at IS NOT NULL AND read_at IS NULL
+
+-- Fetched but not promoted (incomplete workflow)
+WHERE fetched_at IS NOT NULL AND promoted_to_memory_at IS NULL
+
+-- Redelivered items (potential issues)
+WHERE delivery_count > 1
+
+-- Time to action (analytics)
+SELECT AVG(fetched_at - delivered_at) as avg_response_time
+FROM notifications
+WHERE fetched_at IS NOT NULL
+
+-- Promotion rate (are results being used?)
+SELECT 
+    COUNT(*) FILTER (WHERE promoted_to_memory_at IS NOT NULL) / COUNT(*)::float as promotion_rate
+FROM notifications
+WHERE created_at > NOW() - INTERVAL '7 days'
+```
+
+---
+
+```python
+@mcp.tool()
+def store_task_result_in_memory(
+    task_id: str,
+    as_observation: bool = True,
+    domain: str = None,
+    auto_archive: bool = True
+):
+    """
+    Store task results in MemoryGate, closing the async work loop.
+    
+    Records promoted_to_memory_at timestamp and optionally archives notification.
+    This completes the lifecycle: delivered → read → fetched → promoted.
+    
+    Args:
+        task_id: Which task to pull results from
+        as_observation: Store as observation vs pattern
+        domain: MemoryGate domain classification
+        auto_archive: If True, archives the notification after promotion
+                     (prevents inbox clutter for already-stored work)
+    
+    Returns:
+        - memory_id: ID of stored observation/pattern in MemoryGate
+        - notification_archived: bool
+        - promoted_at: Timestamp of promotion
+    """
+    # Implementation:
+    # 1. Fetch task result
+    # 2. Store in MemoryGate
+    # 3. UPDATE notifications
+    #    SET promoted_to_memory_at = NOW(),
+    #        archived_at = CASE WHEN :auto_archive THEN NOW() ELSE NULL END
+    #    WHERE task_id = :task_id
+    # 4. Return confirmation
+```
+
+---
+
+## Common Workflows
+
+### Workflow 1: Multi-Model Consultation
+
+```python
+# Session 1: Queue the work
+task_id = queue_task(
+    task_type="model_consultation",
+    params={
+        "prompt": "Analyze this architecture design...",
+        "models": ["gpt-4o", "claude-opus-4", "deepseek-coder"],
+        "temperature": 0.7
+    },
+    priority=8
+)
+# Returns immediately, work happens in background
+
+# Continue with other tasks...
+# Session ends
+
+# Session 2 (minutes/hours later):
+notifications = async_bootstrap("Kee", "Claude")
+# → "1 unread: model_consultation complete"
+
+notif = read_notification(notifications[0].id)
+# → {task_id: "abc123", email_subject: "Model Consultation Results - abc123"}
+
+results = fetch_task_email(task_id="abc123")
+# → {models: {gpt-4o: "...", opus: "...", deepseek: "..."}}
+
+# Process results, then archive
+store_task_result_in_memory(
+    task_id="abc123",
+    domain="model_consultation_patterns"
+)
+archive_task_email(task_id="abc123", message_id=results.message_id)
+archive_notification(notif.id)
+```
+
+### Workflow 2: Document Indexing
+
+```python
+# Queue long-running indexing task
+task_id = queue_task(
+    task_type="document_index",
+    params={
+        "path": "F:/Documents",
+        "recursive": True,
+        "extract_text": True,
+        "generate_embeddings": True
+    },
+    priority=3  # Low priority, runs when system idle
+)
+
+# Task runs for hours/days in background
+# Periodic progress notifications arrive
+
+# Later session:
+status = check_task_status(task_id)
+# → {status: "running", progress: "45% (4500/10000 files)"}
+
+# Eventually:
+notifications = get_notifications()
+# → "Document indexing complete: 10,000 files indexed"
+
+results = fetch_task_email(task_id)
+# → {index_data: {...}, stats: {...}, errors: [...]}
+
+# Store index in MemoryGate for semantic search
+store_task_result_in_memory(task_id, domain="document_corpus")
+```
+
+### Workflow 3: Image Analysis Batch
+
+```python
+# Queue batch image analysis
+task_id = queue_task(
+    task_type="image_analysis",
+    params={
+        "directory": "F:/Personal OneDrive/OneDrive/Pictures",
+        "operations": ["caption", "tag", "face_detect"],
+        "output_format": "json"
+    }
+)
+
+# Background worker processes images, sends email when done
+
+# Next session:
+results = fetch_task_email(task_id)
+# → {images: [{path, caption, tags, faces}, ...]}
+
+# Use results to rename files
+for img in results.images:
+    move_file(
+        source=img.path,
+        destination=f"{img.directory}/{img.caption}.jpg"
+    )
+```
+
+### Workflow 4: Cross-AI Collaboration
+
+```python
+# Kee sends work to Hexy
+queue_task(
+    task_type="code_review",
+    params={
+        "code": "...",
+        "language": "python",
+        "focus": "security"
+    },
+    recipient_ai="Hexy"  # Routes notification to Hexy
+)
+
+# Background worker emails results to hexy@memorygate.ai
+# Hexy's next session sees notification
+
+# Hexy reviews, sends response back to Kee
+send_email(
+    to="kee@memorygate.ai",
+    subject="Code Review Complete - Task XYZ",
+    body=json.dumps(review_results),
+    archive_copy=True
+)
+
+# Kee's next session retrieves review
+```
+
+---
+
+## Background Workers
+
+Workers use the AsyncGate Worker SDK (FastAPI client) for coordination.
+
+### Worker Types
+
+**1. API Workers** (model consultation, external services)
+
+```python
+from asyncgate_worker import TaskRunner, AsyncGateClient
+import openrouter
+
+client = AsyncGateClient(
+    base_url="https://asyncgate.memorygate.ai",
+    api_key=os.getenv("ASYNCGATE_WORKER_KEY")
+)
+
+runner = TaskRunner(
+    client=client,
+    worker_id="openrouter-001",
+    capabilities=["model_consultation", "embeddings"]
+)
+
+@runner.task("model_consultation", result_channel="email")
+def consult_models(task):
+    prompt = task.params["prompt"]
+    models = task.params["models"]
+    
+    results = {}
+    for i, model in enumerate(models):
+        results[model] = openrouter.complete(model, prompt)
+        
+        # Report progress
+        runner.progress(
+            percent=(i + 1) / len(models) * 100,
+            message=f"Completed {model}"
+        )
+    
+    return {
+        "models": results,
+        "synthesis": synthesize_responses(results),
+        "total_tokens": sum(r["usage"]["total_tokens"] for r in results.values())
+    }
+
+runner.run_forever()
+```
+
+**2. File Processors** (indexing, analysis, transformation)
+
+```python
+@runner.task("document_index", lease_seconds=3600)  # Long lease
+def index_documents(task):
+    path = task.params["path"]
+    files = []
+    
+    for i, filepath in enumerate(find_files(path)):
+        content = extract_text(filepath)
+        embedding = generate_embedding(content)
+        
+        files.append({
+            "path": filepath,
+            "content": content[:500],  # Preview
+            "embedding": embedding
+        })
+        
+        # Heartbeat every 100 files
+        if i % 100 == 0:
+            runner.heartbeat(
+                progress_percent=(i / total_files) * 100,
+                message=f"Indexed {i}/{total_files} files",
+                extend_lease_seconds=600
+            )
+    
+    return {
+        "files": files,
+        "total": len(files),
+        "errors": []
+    }
+```
+
+**3. Scheduled Tasks** (cron-based recurring work)
+
+```python
+# Not using worker SDK - just scheduled script
+# crontab entry:
+# 0 2 * * * python worker_nightly_summary.py
+
+import asyncio
+from asyncgate_worker import AsyncGateClient
+
+async def nightly_summary():
+    # Generate summary
+    summary = await generate_daily_summary()
+    
+    # Send as email result for "daily_summary" task type
+    # (Pre-queued task with cron trigger)
+    client = AsyncGateClient(...)
+    await client.complete_task(
+        task_id=os.getenv("DAILY_SUMMARY_TASK_ID"),
+        run_id=os.getenv("DAILY_SUMMARY_RUN_ID"),
+        summary="Daily summary generated",
+        result_channel="email",
+        result_pointer=await send_summary_email(summary)
+    )
+
+if __name__ == "__main__":
+    asyncio.run(nightly_summary())
+```
+
+### Worker Registration
+
+```python
+# On worker startup
+register_worker(
+    worker_id="openrouter-001",
+    worker_type="model_api",
+    capabilities=["model_consultation", "embeddings"],
+    config={"api_key": "...", "max_concurrent": 3}
+)
+
+# Periodic heartbeat
+update_heartbeat(worker_id="openrouter-001")
+
+# On shutdown
+unregister_worker(worker_id="openrouter-001")
+```
+
+---
+
+## Email Configuration
+
+### Email Addresses
+
+**Per-AI Inboxes:**
+```
+kee@memorygate.ai       → Kee's results
+hexy@memorygate.ai      → Hexy's results
+async@memorygate.ai     → General async worker notifications
+```
+
+**Or use tags/folders with single inbox:**
+```
+kee+tasks@memorygate.ai
+kee+results@memorygate.ai
+```
+
+### SMTP/IMAP Setup
+
+**Preferred: Inbound Webhook** (Postmark Inbound, SendGrid Parse)
+
+```python
+# Postmark inbound webhook configuration
+POST https://asyncgate.yourdomain.com/webhooks/inbound_email
+# Postmark POSTs email as JSON when received
+
+@app.post("/webhooks/inbound_email")
+def handle_inbound_email(email_data: dict):
+    # Parse email, extract task_id from subject
+    # Store result directly in database
+    # Mark task complete
+    # Create notification
+    return {"status": "received"}
+```
+
+**Fallback: IMAP Polling**
+
+Only use if webhook not available. Polling has latency and state management issues.
+
+```python
+# config.py
+EMAIL_CONFIG = {
+    "inbound_method": "webhook",  # preferred
+    # "inbound_method": "imap",   # fallback only
+    
+    "smtp": {
+        "host": "smtp.postmarkapp.com",
+        "port": 587,
+        "username": "...",
+        "password": "...",
+        "from_address": "async@memorygate.ai"
+    },
+    "imap": {  # Only if webhook unavailable
+        "host": "imap.gmail.com",
+        "port": 993,
+        "username": "kee@memorygate.ai",
+        "password": "...",
+        "poll_interval_seconds": 60
+    },
+    "webhook": {  # Preferred
+        "endpoint": "https://asyncgate.memorygate.ai/webhooks/inbound",
+        "secret": "webhook-signing-secret"
+    },
+    "folders": {
+        "inbox": "INBOX",
+        "archive": "Archive/Tasks",
+        "failed": "Failed"
+    }
+}
+```
+
+### Email Templates
+
+```python
+# Task completion email
+TASK_COMPLETE_TEMPLATE = """
+Task Type: {task_type}
+Task ID: {task_id}
+Status: {status}
+Completed: {completed_at}
+
+Summary: {summary}
+
+Results:
+{results_json}
+
+---
+This is an automated message from AsyncGate.
+Task was queued at {created_at} and completed in {duration}.
+"""
+```
+
+---
+
+## Integration with MemoryGate
+
+AsyncGate posts **inbox receipts** to MemoryGate when tasks complete. This creates a unified inbox experience for AI agents.
+
+### Receipt-Based Integration
+
+Instead of managing its own notification system, AsyncGate delegates inbox delivery to MemoryGate:
+
+```
+AsyncGate Task Completes
+         ↓
+Worker reports result pointer to AsyncGate
+         ↓
+AsyncGate posts receipt to MemoryGate (internal API)
+         ↓
+MemoryGate stores receipt
+         ↓
+AI calls memory_bootstrap() → sees receipt in inbox
+         ↓
+AI uses AsyncGate MCP tools to fetch result
+         ↓
+AI stores synthesized result in MemoryGate permanent memory
+         ↓
+Receipt auto-archived
+```
+
+### Posting Receipts
+
+When a task completes, AsyncGate posts a receipt to MemoryGate's internal endpoint:
+
+```python
+# asyncgate/integrations/memorygate.py
+import httpx
+
+MEMORYGATE_URL = "https://memorygate.memorygate.ai"
+SERVICE_TOKEN = os.getenv("MEMORYGATE_SERVICE_TOKEN")
+
+async def send_task_receipt(task):
+    """
+    Post inbox receipt to MemoryGate when task completes/fails.
+    """
+    receipt = {
+        "recipient_ai": task.recipient_ai,
+        "source_system": "asyncgate",
+        "dedupe_key": f"asyncgate:task_{task.status}:{task.task_id}:{task.run_id}",
+        "title": format_task_title(task),
+        "summary": task.summary or format_task_summary(task),
+        "metadata": {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "status": task.status,
+            "result_channel": task.result_channel,
+            "result_pointer": task.result_pointer,
+            "created_at": task.completed_at.isoformat(),
+            "asyncgate_url": "https://asyncgate.memorygate.ai"
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{MEMORYGATE_URL}/internal/inbox/receipt",
+            json=receipt,
+            headers={"X-Service-Token": SERVICE_TOKEN}
+        )
+        
+        if response.status_code == 409:
+            # Duplicate - idempotent success
+            logger.info(f"Receipt already exists for task {task.task_id}")
+            return response.json()["existing_receipt_id"]
+        
+        response.raise_for_status()
+        receipt_id = response.json()["receipt_id"]
+        logger.info(f"Posted receipt {receipt_id} to MemoryGate for task {task.task_id}")
+        return receipt_id
+
+# Called from worker completion handler
+async def handle_task_completion(task_id, run_id, result_channel, result_pointer, summary):
+    # 1. Update task in AsyncGate DB
+    task = await db.mark_task_complete(
+        task_id=task_id,
+        run_id=run_id,
+        result_channel=result_channel,
+        result_pointer=result_pointer,
+        summary=summary
+    )
+    
+    # 2. Create local notification record (for audit trail)
+    notification = await db.create_notification(
+        recipient_ai=task.recipient_ai,
+        task_id=task_id,
+        notification_type="task_complete",
+        summary=summary
+    )
+    
+    # 3. Post receipt to MemoryGate
+    try:
+        receipt_id = await send_task_receipt(task)
+        
+        # 4. Update local audit trail with success
+        await db.update_notification(
+            notification.id,
+            receipt_posted_to_memorygate=True,
+            receipt_id=receipt_id,
+            receipt_posted_at=datetime.now()
+        )
+        
+        logger.info(f"Posted receipt {receipt_id} to MemoryGate for task {task_id}")
+        
+    except Exception as e:
+        # 5. Record failure for retry
+        await db.update_notification(
+            notification.id,
+            receipt_posted_to_memorygate=False,
+            receipt_post_error=str(e)
+        )
+        
+        logger.error(f"Failed to post receipt to MemoryGate for task {task_id}: {e}")
+        # Background job will retry failed posts
+    
+    return {"status": "complete", "receipt_id": receipt_id if receipt_id else None}
+
+# Background job: Retry failed receipt posts
+async def retry_failed_receipts():
+    """
+    Periodic job to retry receipts that failed to post to MemoryGate.
+    """
+    failed = await db.fetch_all("""
+        SELECT * FROM notifications
+        WHERE receipt_posted_to_memorygate = FALSE
+          AND created_at > NOW() - INTERVAL '24 hours'
+        ORDER BY created_at DESC
+    """)
+    
+    for notification in failed:
+        task = await db.get_task(notification.task_id)
+        try:
+            receipt_id = await send_task_receipt(task)
+            await db.update_notification(
+                notification.id,
+                receipt_posted_to_memorygate=True,
+                receipt_id=receipt_id,
+                receipt_posted_at=datetime.now(),
+                receipt_post_error=None
+            )
+            logger.info(f"Retry succeeded: Posted receipt {receipt_id} for task {task.task_id}")
+        except Exception as e:
+            logger.error(f"Retry failed for task {task.task_id}: {e}")
+```
+
+### AI Workflow (Unified Inbox)
+
+AI agents see a single inbox combining all notification sources:
+
+```python
+# Session start - one bootstrap call
+bootstrap = memory_bootstrap("Kee", "Claude")
+
+print(f"Inbox: {bootstrap['inbox_unread_count']} items")
+for item in bootstrap['inbox_items']:
+    print(f"  - [{item['source_system']}] {item['title']}")
+
+# Example output:
+# Inbox: 3 items
+#   - [asyncgate] Model Consultation Complete
+#   - [email_monitor] New email from PStryder
+#   - [asyncgate] Document Index Failed
+
+# Read receipt
+receipt = read_inbox_receipt(bootstrap['inbox_items'][0]['receipt_id'])
+
+# Check source to determine action
+if receipt['metadata']['source_system'] == 'asyncgate':
+    # AsyncGate task - fetch the result
+    task_id = receipt['metadata']['task_id']
+    result = fetch_task_result(task_id)  # AsyncGate MCP tool
+    
+    # Process result...
+    synthesized = process_and_synthesize(result)
+    
+    # Store in permanent memory
+    memory_id = memory_store(
+        observation=synthesized,
+        domain=receipt['metadata']['task_type']
+    )
+    
+    # Archive receipt (work is complete)
+    archive_inbox_receipt(receipt['receipt_id'])
+```
+
+### Why This Design?
+
+**Benefits of Receipt-Based Integration:**
+
+1. **Unified Inbox** - AI sees one inbox (MemoryGate) instead of multiple notification sources
+2. **Clean Separation** - AsyncGate = task orchestration, MemoryGate = inbox delivery
+3. **Generic Pattern** - Any system can post receipts (email monitors, API watchers, etc.)
+4. **Idempotent** - Dedupe keys prevent duplicate receipts from retries
+5. **Minimal Coupling** - AsyncGate doesn't need to know about other notification sources
+
+**What AsyncGate Stores:**
+- Task state and lifecycle
+- Result pointers (source of truth)
+- Worker coordination
+- Progress tracking
+
+**What MemoryGate Stores:**
+- Inbox receipts (lightweight notifications)
+- Permanent observations/patterns (synthesized knowledge)
+- Cross-session continuity
+
+**What AsyncGate Stores Internally:**
+- Tasks table: Full task state and lifecycle
+- Task progress: Active monitoring
+- Notifications table (minimal): Local audit trail of receipts posted to MemoryGate
+  - Used for debugging ("did we post this receipt?")
+  - Not exposed to AI (MemoryGate handles inbox delivery)
+  - Retention: Keep for debugging, can archive after MemoryGate confirms delivery
+
+**Data Flow:**
+```
+Worker completes task
+    ↓
+AsyncGate updates task state
+    ↓
+AsyncGate posts receipt to MemoryGate ──→ MemoryGate stores receipt
+    ↓                                           ↓
+AsyncGate records notification locally    AI sees in bootstrap
+(for debugging/audit only)
+```
+
+**Why Keep AsyncGate Notifications Table?**
+
+1. **Debugging:** "Did we post a receipt for this task?"
+2. **Retry Logic:** If MemoryGate receipt post fails, can retry from local record
+3. **Audit Trail:** Complete history of what was sent where
+4. **Redundancy:** If MemoryGate has issues, local record exists
+5. **Analytics:** Track receipt posting patterns, failures, latencies
+
+**Important:** AsyncGate notifications are **not the source of truth for inbox**. They're a local audit trail. AI agents never interact with AsyncGate's notifications table directly - they only see receipts in MemoryGate.
+
+---
+
+### Storage Decision Tree
+
+```python
+def process_task_results(task_id):
+    results = fetch_task_email(task_id)
+    
+    # Decide what goes in MemoryGate
+    if results.task_type == "model_consultation":
+        # Store synthesized patterns, not raw responses
+        pattern = synthesize_model_responses(results.data)
+        memory_update_pattern(
+            category="model_consultation",
+            pattern_name=f"architecture_{task.params.topic}",
+            pattern_text=pattern
+        )
+    
+    elif results.task_type == "document_index":
+        # Store as document reference, not full content
+        memory_store_document(
+            title=f"Document Index: {task.params.path}",
+            url=f"email://{results.message_id}",
+            content_summary=results.summary,
+            key_concepts=results.top_concepts
+        )
+    
+    elif results.task_type == "image_analysis":
+        # Store observations about content discovered
+        for insight in results.insights:
+            memory_store(
+                observation=insight.text,
+                domain="image_content_discovery",
+                evidence=[insight.image_path]
+            )
+    
+    # Clean up AsyncGate after storing in MemoryGate
+    archive_task_email(task_id)
+    archive_notification(notification_id)
+```
+
+---
+
+## Deployment
+
+### Option 1: Separate Service
+
+```
+AsyncGate/
+├── asyncgate/
+│   ├── server.py          # MCP server (FastAPI + FastMCP)
+│   ├── db.py              # Database connection
+│   ├── tasks.py           # Task management logic
+│   ├── email.py           # SMTP/IMAP handling
+│   └── workers/
+│       ├── model_api.py
+│       ├── file_processor.py
+│       └── scheduler.py
+├── migrations/
+│   └── 001_init.sql
+├── config.py
+├── requirements.txt
+└── fly.toml              # Deploy to Fly.io alongside MemoryGate
+```
+
+### Option 2: MemoryGate Extension
+
+```
+MemoryGate/
+├── memorygate/
+│   ├── memory/           # Existing memory tools
+│   └── async/            # New async tools
+│       ├── tasks.py
+│       ├── notifications.py
+│       └── email.py
+└── migrations/
+    ├── 010_async_tables.sql  # Add async tables to existing DB
+```
+
+**Recommendation: Separate Service**
+
+Reasons:
+- Different operational concerns (task execution vs memory)
+- Can scale independently
+- Easier to debug/monitor separately
+- Clean separation of responsibilities
+- Can be reused by other systems beyond MemoryGate
+
+---
+
+## Security Considerations
+
+### Email Security
+
+1. **Email Authentication:**
+   - Use DKIM/SPF for outbound email
+   - Verify sender for inbound email
+   - Reject emails from untrusted sources
+
+2. **Content Validation:**
+   - Sanitize email content before parsing
+   - Validate JSON structure
+   - Size limits on attachments
+   - Virus scanning for attachments
+
+3. **Access Control:**
+   - Per-AI email addresses
+   - API keys for email access
+   - Rate limiting on sends
+   - Archive sensitive results encrypted
+
+### Task Security
+
+1. **Input Validation:**
+   - Sanitize task parameters
+   - Whitelist allowed task types
+   - Validate file paths (no directory traversal)
+   - Limit resource usage per task
+
+2. **Worker Isolation:**
+   - Workers run in containers
+   - Limited file system access
+   - Network restrictions
+   - Resource quotas (CPU, memory, time)
+
+3. **Result Verification:**
+   - Check worker identity
+   - Validate result format
+   - Detect tampering
+   - Log all operations
+
+---
+
+## Monitoring & Observability
+
+### Metrics to Track
+
+```python
+# Task metrics
+tasks_queued_total
+tasks_completed_total
+tasks_failed_total
+task_duration_seconds (histogram)
+tasks_by_type (gauge)
+
+# Email metrics
+emails_sent_total
+emails_received_total
+email_delivery_failures
+email_processing_latency
+
+# Worker metrics
+workers_active (gauge)
+worker_task_processing_time
+worker_errors_total
+worker_heartbeat_age (gauge)
+
+# System health
+notification_queue_depth
+unread_notifications_age
+task_queue_depth
+oldest_pending_task_age
+```
+
+### Health Checks
+
+```python
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "database": check_db_connection(),
+        "email": check_email_connection(),
+        "workers": count_active_workers(),
+        "oldest_pending_task": get_oldest_pending_task_age()
+    }
+```
+
+---
+
+## Cost Analysis
+
+### Email Costs
+- **Gmail/Outlook:** Free for moderate usage (<100k emails/month)
+- **Postmark:** $15/month for 10k emails, $1.25 per additional 1k
+- **SendGrid:** Free tier: 100 emails/day, $15/month for 40k
+
+### Database Costs
+- **Fly.io Postgres:** $7/month for 1GB
+- **Supabase:** Free tier adequate for moderate usage
+
+### Worker Costs
+- **Fly.io VMs:** $3/month per shared-cpu-1x
+- **Background processes:** Can run on same instances as MCP server
+
+**Total estimated cost:** $20-30/month for moderate usage
+
+---
+
+## Success Criteria
+
+### Minimum Viable Product
+- ✅ Queue tasks via MCP tool
+- ✅ Background workers execute tasks
+- ✅ Email delivery of results
+- ✅ Database notifications
+- ✅ Retrieve results via MCP
+- ✅ Archive completed work
+
+### Platform Success
+- ✅ Multiple task types supported
+- ✅ Cross-AI communication working
+- ✅ Integration with MemoryGate validated
+- ✅ Worker monitoring functional
+- ✅ Email reliability acceptable (>99%)
+
+### Usage Validation
+- ✅ AI agents use it without prompting
+- ✅ Results actually improve workflow
+- ✅ Pattern extraction from async work
+- ✅ Long-running tasks complete successfully
+
+---
+
+## Future Enhancements
+
+### Phase 2: Advanced Features
+- Task dependencies (Task B waits for Task A)
+- Scheduled recurring tasks (cron expressions)
+- Result streaming (progressive updates)
+- Multi-step workflows (DAGs)
+- Priority queues with preemption
+
+### Phase 3: Collaboration
+- Shared task pools (multiple AIs work on same queue)
+- Task delegation (AI assigns work to other AIs)
+- Review/approval workflows
+- Collaborative result synthesis
+
+### Phase 4: Intelligence
+- Automatic task type detection
+- Smart worker assignment based on capabilities
+- Failure prediction and prevention
+- Resource optimization
+- Cost tracking and budgeting
+
+---
+
+---
+
+## Retention & Cleanup
+
+### Dead Letter Handling
+
+```python
+def handle_task_failure(task_id, run_id, error, retryable):
+    task = db.get_task(task_id)
+    
+    if not retryable or task.retry_count >= task.max_retries:
+        # Exhausted retries - move to dead letter
+        db.execute("""
+            UPDATE tasks
+            SET status = 'dead_letter',
+                error_message = :error
+            WHERE task_id = :tid
+        """, {"error": error, "tid": task_id})
+        
+        # Notify recipient
+        create_notification(
+            recipient=task.recipient_ai,
+            type="task_dead_letter",
+            message=f"Task {task_id} failed after {task.retry_count} retries: {error}"
+        )
+    else:
+        # Retry with exponential backoff
+        retry_delay = min(300 * (2 ** task.retry_count), 3600)  # Max 1 hour
+        schedule_retry(task_id, delay_seconds=retry_delay)
+```
+
+### Automatic Archiving
+
+```python
+# Cron job: Run daily
+def archive_old_tasks():
+    """
+    Archive completed tasks past their retention period.
+    Keeps notifications + metadata, purges large result payloads.
+    """
+    db.execute("""
+        UPDATE tasks
+        SET result_pointer = NULL,  -- Clear large data
+            result_channel = 'archived'
+        WHERE status IN ('complete', 'dead_letter')
+          AND completed_at < NOW() - (retention_days || ' days')::INTERVAL
+          AND result_pointer IS NOT NULL
+    """)
+    
+    # Optionally: Archive email results to cold storage
+    # Delete emails from active inbox after archiving task
+```
+
+### Cleanup After Memory Promotion
+
+```python
+@mcp.tool()
+def store_task_result_in_memory(
+    task_id: str,
+    as_observation: bool = True,
+    domain: str = None,
+    purge_payload: bool = True  # New parameter
+):
+    """
+    Store task results in MemoryGate, optionally purge from AsyncGate.
+    
+    Once results are in permanent memory, AsyncGate payload can be deleted
+    to free storage. Keeps task record + notification for reference.
+    """
+    # Store in MemoryGate
+    memory_store(observation=..., domain=domain)
+    
+    if purge_payload:
+        # Clear large data, keep metadata
+        db.execute("""
+            UPDATE tasks
+            SET result_pointer = NULL,
+                result_channel = 'memory_promoted'
+            WHERE task_id = :tid
+        """, {"tid": task_id})
+        
+        # Archive or delete associated email
+        archive_task_email(task_id)
+```
+
+---
+
+## Implementation Timeline
+
+### Week 1: Core Infrastructure
+- Database schema
+- Basic MCP tools
+- Email sending/receiving
+- Simple worker framework
+
+### Week 2: Task Management
+- Task queueing
+- Status tracking
+- Notification system
+- Result retrieval
+
+### Week 3: Worker Implementation
+- Model consultation worker (OpenRouter)
+- File processing worker
+- Worker registration system
+- Health monitoring
+
+### Week 4: Integration & Polish
+- MemoryGate integration
+- Testing workflows end-to-end
+- Documentation
+- Deployment
+
+**Total: 4 weeks to MVP**
+
+---
+
+## Conclusion
+
+AsyncGate solves the "ephemeral AI agent" problem by providing persistent task orchestration. It uses:
+- **Database for reliability** (notifications, status)
+- **Email for scalability** (results, storage)
+- **Workers for execution** (background processes)
+- **MemoryGate for learning** (storing insights)
+
+This enables AI agents to:
+- Work on long-running tasks across sessions
+- Collaborate asynchronously with other AIs
+- Leverage external compute resources
+- Build knowledge from async discoveries
+
+The system is simple, cheap, and uses boring technology (PostgreSQL, email, background processes) to solve a novel problem: **giving ephemeral AI agents the ability to work persistently**.
+
+---
+
+*Concept documented: 2026-01-03*  
+*Revisit when: Ready to build async infrastructure or extend MemoryGate capabilities*
+
+
+---
+
+## Receipt Emission Requirements (Added 2026-01-04)
+
+**See `receipt_protocol.md` for complete receipt specification.**
+
+AsyncGate emits receipts to MemoryGate at every task lifecycle event. This provides complete audit trails and enables temporal resilience.
+
+### Receipt Emission Events
+
+**1. Task Queued (`queue_task()` called)**
+
+When Principal or DeleGate queues a task, AsyncGate immediately emits receipt:
+
+```python
+# After task inserted into database
+receipt_id = f"R.{timestamp}.asyncgate.{task_id}"
+
+await post_receipt_to_memorygate({
+    "receipt_id": receipt_id,
+    "event_type": "task_queued",
+    "recipient_ai": task.recipient_ai,
+    "source_system": "asyncgate",
+    "summary": f"{task.task_type} queued for execution",
+    "artifact_pointer": task.task_id,
+    "artifact_location": "asyncgate_tasks",
+    "requires_action": False,  # No action until completion
+    "suggested_next_step": "Wait for completion receipt",
+    "caused_by_receipt_id": task.params.get("caused_by_receipt_id"),
+    "dedupe_key": f"asyncgate:task_queued:{task.task_id}:{task.run_id}",
+    "metadata": {
+        "task_id": task.task_id,
+        "task_type": task.task_type,
+        "priority": task.priority,
+        "estimated_runtime_seconds": task.estimated_runtime
+    }
+})
+```
+
+**2. Task Complete (`complete_task()` called by worker)**
+
+When worker completes successfully, AsyncGate emits completion receipt:
+
+```python
+# After task marked complete in database
+completion_receipt_id = f"Complete.R.{original_timestamp}.asyncgate.{task_id}"
+
+await post_receipt_to_memorygate({
+    "receipt_id": completion_receipt_id,
+    "event_type": "task_complete",
+    "recipient_ai": task.recipient_ai,
+    "source_system": "asyncgate",
+    "summary": task.summary or f"{task.task_type} completed successfully",
+    "artifact_pointer": task.result_pointer,
+    "artifact_location": task.result_channel,
+    "requires_action": True,  # AI should fetch and process
+    "suggested_next_step": "Fetch result via artifact_pointer",
+    "caused_by_receipt_id": None,  # Completion receipts don't chain, they pair
+    "dedupe_key": f"asyncgate:task_complete:{task.task_id}:{task.run_id}",
+    "metadata": {
+        "task_id": task.task_id,
+        "task_type": task.task_type,
+        "duration_seconds": (task.completed_at - task.created_at).total_seconds(),
+        "result_checksum": task.result_checksum
+    }
+})
+```
+
+**Note:** MemoryGate automatically pairs completion receipt with queued receipt based on receipt_id format.
+
+**3. Task Failed (`fail_task()` called by worker or timeout)**
+
+When task fails (worker failure, timeout, max retries exceeded):
+
+```python
+completion_receipt_id = f"Complete.R.{original_timestamp}.asyncgate.{task_id}"
+
+await post_receipt_to_memorygate({
+    "receipt_id": completion_receipt_id,
+    "event_type": "task_failed",
+    "recipient_ai": task.recipient_ai,
+    "source_system": "asyncgate",
+    "summary": f"{task.task_type} failed: {task.error_message}",
+    "artifact_pointer": None,
+    "artifact_location": None,
+    "requires_action": True,  # AI should handle failure
+    "suggested_next_step": "Review error and decide retry/escalate",
+    "dedupe_key": f"asyncgate:task_failed:{task.task_id}:{task.run_id}",
+    "metadata": {
+        "task_id": task.task_id,
+        "task_type": task.task_type,
+        "error_message": task.error_message,
+        "retry_count": task.retry_count,
+        "retryable": task.retryable
+    }
+})
+```
+
+### Receipt Posting Implementation
+
+```python
+# asyncgate/integrations/memorygate.py
+import httpx
+import os
+
+MEMORYGATE_URL = os.getenv("MEMORYGATE_URL")
+SERVICE_TOKEN = os.getenv("MEMORYGATE_SERVICE_TOKEN")
+
+async def post_receipt_to_memorygate(receipt: dict) -> str:
+    """
+    Post receipt to MemoryGate receipt store.
+    
+    Args:
+        receipt: Receipt dictionary conforming to receipt_protocol.md schema
+    
+    Returns:
+        Receipt UUID from MemoryGate
+        
+    Raises:
+        HTTPException if MemoryGate unavailable or rejects receipt
+    """
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.post(
+                f"{MEMORYGATE_URL}/internal/receipt",
+                json=receipt,
+                headers={"X-Service-Token": SERVICE_TOKEN}
+            )
+            
+            if response.status_code == 409:
+                # Duplicate - already sent, idempotent success
+                logger.info(f"Receipt already exists: {receipt['receipt_id']}")
+                return response.json()["existing_uuid"]
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info(f"Receipt posted: {receipt['receipt_id']} → {result['uuid']}")
+            return result["uuid"]
+            
+        except httpx.TimeoutException:
+            # Queue locally for retry
+            logger.error(f"MemoryGate timeout posting receipt: {receipt['receipt_id']}")
+            await queue_receipt_for_retry(receipt)
+            raise HTTPException(503, "MemoryGate unavailable")
+            
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to post receipt: {e}")
+            raise
+```
+
+### Queue Task with Receipt Emission
+
+```python
+@mcp.tool()
+async def queue_task(
+    task_type: str,
+    params: dict,
+    recipient_ai: str,
+    priority: int = 5,
+    idempotency_key: str = None,
+    caused_by_receipt_id: str = None  # NEW: for receipt chaining
+) -> dict:
+    """
+    Queue async task for execution.
+    
+    Args:
+        task_type: Type of task to execute
+        params: Task parameters
+        recipient_ai: AI that should receive completion notice
+        priority: Task priority 1-10
+        idempotency_key: Prevent duplicate submissions
+        caused_by_receipt_id: Receipt that caused this task (for chaining)
+    
+    Returns:
+        task_id, estimated_runtime_seconds, poll_suggestion_seconds, receipt_id
+    """
+    # Create task in database
+    task = await db.create_task(
+        task_type=task_type,
+        params=params,
+        recipient_ai=recipient_ai,
+        priority=priority,
+        idempotency_key=idempotency_key
+    )
+    
+    # Emit receipt IMMEDIATELY (before any failure points)
+    receipt_uuid = await post_receipt_to_memorygate({
+        "receipt_id": f"R.{timestamp()}.asyncgate.{task.task_id}",
+        "event_type": "task_queued",
+        "recipient_ai": recipient_ai,
+        "source_system": "asyncgate",
+        "summary": f"{task_type} queued",
+        "artifact_pointer": task.task_id,
+        "artifact_location": "asyncgate_tasks",
+        "requires_action": False,
+        "caused_by_receipt_id": caused_by_receipt_id,
+        "dedupe_key": f"asyncgate:task_queued:{task.task_id}:{task.run_id}",
+        "metadata": {
+            "task_id": task.task_id,
+            "task_type": task_type,
+            "priority": priority
+        }
+    })
+    
+    return {
+        "task_id": task.task_id,
+        "estimated_runtime_seconds": task.estimated_runtime,
+        "poll_suggestion_seconds": task.poll_suggestion,
+        "receipt_id": f"R.{timestamp()}.asyncgate.{task.task_id}",
+        "receipt_uuid": receipt_uuid
+    }
+```
+
+### Worker Completion with Receipt Emission
+
+```python
+@app.post("/workers/complete")
+async def complete_task(completion: TaskCompletion):
+    """
+    Worker reports task completion.
+    
+    Validates completion, updates database, emits receipt to MemoryGate.
+    """
+    # Validate task and worker ownership
+    task = await db.get_task(completion.task_id)
+    validate_worker_owns_task(task, completion.run_id)
+    
+    # Update task in database
+    await db.update_task(
+        task_id=completion.task_id,
+        status="complete",
+        completed_at=datetime.utcnow(),
+        result_pointer=completion.result_pointer,
+        result_channel=completion.result_channel,
+        summary=completion.summary,
+        metadata=completion.metadata
+    )
+    
+    # Emit completion receipt
+    receipt_uuid = await post_receipt_to_memorygate({
+        "receipt_id": f"Complete.R.{extract_timestamp(task.receipt_id)}.asyncgate.{task.task_id}",
+        "event_type": "task_complete",
+        "recipient_ai": task.recipient_ai,
+        "source_system": "asyncgate",
+        "summary": completion.summary,
+        "artifact_pointer": completion.result_pointer,
+        "artifact_location": completion.result_channel,
+        "requires_action": True,
+        "suggested_next_step": "Fetch result and process",
+        "dedupe_key": f"asyncgate:task_complete:{task.task_id}:{task.run_id}",
+        "metadata": {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "duration_seconds": (datetime.utcnow() - task.created_at).total_seconds()
+        }
+    })
+    
+    return {
+        "status": "completed",
+        "receipt_uuid": receipt_uuid
+    }
+```
+
+### Receipt Retry Queue
+
+If MemoryGate is temporarily unavailable, AsyncGate queues receipts for retry:
+
+```python
+# Receipt retry queue (Redis or database)
+async def queue_receipt_for_retry(receipt: dict):
+    """Queue receipt for retry if MemoryGate unavailable."""
+    await redis.lpush("receipt_retry_queue", json.dumps(receipt))
+
+# Background worker retries failed receipts
+async def receipt_retry_worker():
+    """Periodically retry posting failed receipts."""
+    while True:
+        receipt_json = await redis.brpop("receipt_retry_queue", timeout=10)
+        if receipt_json:
+            receipt = json.loads(receipt_json[1])
+            try:
+                await post_receipt_to_memorygate(receipt)
+                logger.info(f"Retry success: {receipt['receipt_id']}")
+            except Exception as e:
+                logger.error(f"Retry failed: {e}")
+                await redis.lpush("receipt_retry_queue", receipt_json[1])
+                await asyncio.sleep(30)  # Backoff
+```
+
+### Receipt Configuration in Bootstrap
+
+AsyncGate can query MemoryGate for receipt format rules (though typically hardcoded):
+
+```python
+# Get receipt configuration from MemoryGate bootstrap
+async def get_receipt_config() -> dict:
+    """Fetch receipt schema and format rules from MemoryGate."""
+    bootstrap = await memorygate.memory_bootstrap("asyncgate", "system")
+    return bootstrap["receipt_config"]
+```
+
+### Monitoring Receipt Emission
+
+Prometheus metrics for receipt emission:
+
+```python
+receipt_emissions_total = Counter(
+    "asyncgate_receipt_emissions_total",
+    "Total receipts emitted to MemoryGate",
+    ["event_type", "success"]
+)
+
+receipt_emission_duration = Histogram(
+    "asyncgate_receipt_emission_duration_seconds",
+    "Receipt emission latency"
+)
+
+receipt_retry_queue_size = Gauge(
+    "asyncgate_receipt_retry_queue_size",
+    "Number of receipts queued for retry"
+)
+```
+
+### Receipt Emission Guarantees
+
+**At-least-once delivery:**
+- Receipt emitted before any failure points in task lifecycle
+- Retry queue ensures eventual delivery even if MemoryGate temporarily down
+- Dedupe keys prevent duplicate receipts
+
+**Ordering:**
+- task_queued receipt always emitted before task_complete
+- Completion receipt references original queued receipt via receipt_id format
+
+**Pairing:**
+- MemoryGate automatically pairs completion with queued receipt
+- No action required from AsyncGate beyond posting both
+
+---
+
+*Receipt integration added: 2026-01-04*  
+*See receipt_protocol.md for complete specification*  
+*See memorygate_receipt_store.md for MemoryGate implementation*

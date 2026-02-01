@@ -1,0 +1,203 @@
+MemoryGate Privacy Policy
+
+Last updated: January 2026
+
+1. Overview
+
+MemoryGate is a memory-as-a-service platform designed to provide persistent, user-controlled memory for AI systems and applications.
+Our service exists solely to store, retrieve, and manage data that you explicitly choose to persist.
+
+We take privacy seriously because trust is the entire product.
+
+This policy explains:
+
+what data we store,
+
+why we store it,
+
+how it is protected,
+
+and how you can delete it.
+
+2. What Data We Collect
+
+MemoryGate stores only data explicitly sent to the service by you or your application.
+
+This may include:
+
+short text memories or summaries,
+
+structured metadata you provide (domains, confidence scores, tags),
+
+timestamps related to storage and access,
+
+identifiers required to associate data with your account or AI instance.
+
+We do not:
+
+collect full chat transcripts unless you send them,
+
+scrape data from your conversations,
+
+infer or reconstruct context beyond what is explicitly submitted.
+
+3. Why We Store This Data
+
+MemoryGate stores data for one reason only:
+
+To provide persistent memory functionality across sessions and systems.
+
+Retention is not incidental—it is the service.
+
+Stored data enables:
+
+recall across conversations,
+
+semantic search,
+
+summarization and memory consolidation,
+
+user-directed archiving and deletion.
+
+We do not use your data for analytics, training, advertising, profiling, or any secondary purpose.
+
+4. How We Use (and Do Not Use) Your Data
+Permitted use
+
+Processing requests you initiate (store, search, retrieve, summarize).
+
+Maintaining service integrity (e.g. indexing, encryption, backups).
+
+Explicitly prohibited use
+
+We do not:
+
+read or review customer data for curiosity or content analysis,
+
+share data with third parties,
+
+sell data,
+
+use data to train models,
+
+mine data for behavioral insights.
+
+Access to stored data by operators is strictly limited and logged, and only permitted for security or operational necessity.
+
+5. Data Isolation and Access Control
+
+Each customer’s data is:
+
+logically isolated from other customers,
+
+accessible only via authenticated credentials,
+
+protected by role-based access controls.
+
+Requests are authorized per account and scoped to that account’s data only.
+
+6. Encryption and Security
+In transit
+
+All data is encrypted in transit using industry-standard TLS.
+
+At rest
+
+All stored data is encrypted at rest using strong cryptographic standards (e.g. AES-256).
+
+Key management
+
+Encryption keys are managed using secure key-management practices and are not stored alongside the encrypted data.
+
+Design intent: MemoryGate is being architected so that operators do not have routine access to decrypted customer data. Where decryption is required for service operation, it occurs in controlled execution paths only.
+
+As the service evolves, we intend to further reduce operator visibility through stronger cryptographic separation.
+
+7. Data Retention
+
+MemoryGate retains data for as long as you choose to retain it.
+
+Retention behavior includes:
+
+active memory storage,
+
+optional summarization and archiving,
+
+cold storage of unused data,
+
+eventual deletion if configured by you.
+
+Retention policies are configurable and transparent.
+
+8. Deletion and Data Subject Rights (GDPR)
+
+You retain full control over your data.
+
+You may:
+
+delete individual memory entries,
+
+delete categories or time ranges of data,
+
+delete all data associated with your account.
+
+Deletion requests are honored promptly and permanently, subject only to minimal technical delays (e.g. backup rotation).
+
+If you are located in the EU or UK, you have the right to:
+
+access your data,
+
+correct inaccurate data,
+
+request deletion (“right to be forgotten”),
+
+receive a copy of your data in a structured format.
+
+Requests can be made through documented service interfaces or by contacting us directly.
+
+9. Data Sharing
+
+We do not share your data with anyone.
+
+No partners.
+No advertisers.
+No affiliates.
+No training pipelines.
+
+Data is disclosed only if required by law, and only to the extent legally mandated.
+
+10. Logs and Telemetry
+
+Operational logs are limited to:
+
+request metadata,
+
+error information,
+
+performance metrics.
+
+Logs are designed to avoid storing memory content or personally identifiable information.
+
+11. Compliance and Standards
+
+MemoryGate is built to meet or exceed:
+
+SOC 2 security principles,
+
+GDPR requirements,
+
+industry best practices for secure SaaS platforms.
+
+Security controls, access reviews, and change management are part of our ongoing operations.
+
+12. Changes to This Policy
+
+If this policy changes, we will update the “Last updated” date and provide notice for material changes.
+
+13. Contact
+
+For privacy questions, data requests, or concerns:
+
+Email: privacy@memorygate.ai
+
+Support: support@memorygate.ai

@@ -1,0 +1,264 @@
+LegiVellum Integration Lock Spec v0 (Normative)
+
+NOTE (2026-01-26): This is a supplemental lock doc. ReceiptGate is the
+canonical receipt ledger; references to MemoryGate as receipt store are
+historical. Canonical contracts in /LegiVellum/docs/canonical/ override.
+
+Status: Normative (integration contract)
+Purpose: Define the minimum frozen contracts required before integrating the LegiVellum primitives, so implementation does not drift into chaos.
+Normative language: MUST/SHALL/SHOULD interpreted per RFC-style usage (mirrors your receipt rules doc). 
+
+receipt.rules
+
+0) Glossary (frozen meanings)
+
+Receipt: Immutable, auditable record of an obligation lifecycle event; the only coordination protocol. 
+
+receipt.rules
+
+Obligation: A unit of responsibility created by phase: accepted, resolved by phase: complete, or transferred/ended by phase: escalate. 
+
+receipt.rules
+
+ 
+
+receipt.rules
+
+Task: A work specification (often held/leased via AsyncGate) whose lifecycle is proven by receipts keyed to task_id. AsyncGate is not a scheduler; it is a boundary that parks work. 
+
+Updated Specifications for Legi…
+
+Plan: A structured, immutable description of future work; stored as a DepotGate artifact; produced by DeleGate. 
+
+Updated Specifications for Legi…
+
+Principal: The ultimate owning AI identity for an intent stream; authority boundary for minting obligations. 
+
+Updated Specifications for Legi…
+
+Offer: An AsyncGate lease offer; transient and creates no obligation. 
+
+asyncgate.lease
+
+ 
+
+asyncgate.lease
+
+Lease: AsyncGate’s internal coordination mechanism for work-in-flight; acceptance is proven by receipts, not lease state. 
+
+asyncgate.lease
+
+1) System invariants (MUST be true everywhere)
+1.1 Prohibition against silent action
+
+Any component that accepts responsibility MUST emit an accepted receipt. 
+
+# LegiVellum — The Misuse Codex
+
+Components incapable of emitting receipts MUST NOT accept responsibility. 
+
+# LegiVellum — The Misuse Codex
+
+Internal cognition without side effects SHOULD emit no receipts. 
+
+# LegiVellum — The Misuse Codex
+
+1.2 Authority boundaries (thought ≠ action)
+
+Only Principals and DeleGates MUST possess APIs capable of minting obligations. 
+
+# LegiVellum — The Misuse Codex
+
+ 
+
+Updated Specifications for Legi…
+
+CogniGate MUST NOT mint tasks/plans/obligations. 
+
+# LegiVellum — The Misuse Codex
+
+ 
+
+Updated Specifications for Legi…
+
+Workers/execution engines MUST NOT create new tasks, plans, or delegation chains. 
+
+# LegiVellum — The Misuse Codex
+
+1.3 Memory does not act
+
+MemoryGate MUST be passive: no triggers/hooks/reactive execution. 
+
+# LegiVellum — The Misuse Codex
+
+ReceiptGate MUST store receipts immutably; derived state is computed by query, not mutation. 
+
+Updated Specifications for Legi…
+
+1.4 Time does not hold cognition hostage
+
+All long-running work MUST cross the AsyncGate boundary (no synchronous waiting loops). 
+
+# LegiVellum — The Misuse Codex
+
+2) Receipt Protocol v1 (integration-critical subset)
+2.1 Phases are fixed and globally interpreted
+
+phase MUST be one of: accepted, complete, escalate. 
+
+Updated Specifications for Legi…
+
+ 
+
+receipt.rules
+
+2.2 accepted creates obligation
+
+An accepted receipt MUST create an obligation for the issuer (source_system) acting on behalf of from_principal. 
+
+receipt.rules
+
+The issuer MUST eventually either resolve (complete) or transfer (escalate) that obligation. 
+
+receipt.rules
+
+2.3 complete resolves obligation
+
+A complete receipt MUST resolve the obligation created by the corresponding accepted receipt for the same task_id. 
+
+receipt.rules
+
+2.4 escalate transfers/ends obligation (no completion required)
+
+An escalate receipt MUST end the issuer’s obligation for that task instance. 
+
+receipt.rules
+
+Escalation receipts SHALL NOT require their own complete receipt. 
+
+receipt.rules
+
+2.5 Escalation routing invariant + continuation link
+
+For phase: escalate, recipient_ai MUST equal escalation_to. 
+
+receipt.rules
+
+ 
+
+memorygate_receipt_store
+
+The new owner MUST continue by issuing new accepted task(s) linked via parent_task_id and/or caused_by_receipt_id. 
+
+receipt.rules
+
+2.6 Multi-tenant identity is server-assigned
+
+tenant_id MUST be assigned by the server from authenticated context and MUST NOT be client-specified. 
+
+receipt.rules
+
+All queries MUST be filtered by authenticated tenant_id and isolated at DB level. 
+
+receipt.rules
+
+3) ReceiptGate integration contract (frozen API + behavior)
+
+ReceiptGate MUST accept and validate receipts via POST /receipts. 
+
+Updated Specifications for Legi…
+
+ReceiptGate MUST expose read-only query endpoints:
+
+GET /inbox
+
+GET /receipts/task/:task_id
+
+GET /receipts/chain/:receipt_id 
+
+Updated Specifications for Legi…
+
+ 
+
+receipt.store
+
+ReceiptGate MUST NOT mint obligations, schedule tasks, or coordinate execution. 
+
+Updated Specifications for Legi…
+
+ReceiptGate MUST support multi-emitter receipts (not “single writer”), while remaining the sole store of truth and enforcing validation/ordering. 
+
+Updated Specifications for Legi…
+
+MetaGate bootstrap receipts MAY be emitted into ReceiptGate and MUST follow the same schema/validation rules. 
+
+Updated Specifications for Legi…
+
+4) AsyncGate integration contract (offer/lease boundary)
+
+AsyncGate MUST NOT schedule/orchestrate; it holds tasks until claimed. 
+
+Updated Specifications for Legi…
+
+AsyncGate MUST maintain “offer vs acceptance”:
+
+Lease offers are transient (no receipt)
+
+Worker acceptance is proven by emitting an accepted receipt to ReceiptGate 
+
+asyncgate.lease
+
+ 
+
+asyncgate.lease
+
+Worker flow MUST be:
+Poll → receive offer → emit accepted → do work → emit complete. 
+
+asyncgate.lease
+
+If a worker crashes after acceptance, AsyncGate SHOULD detect orphan via lease expiry and MAY emit an escalate receipt (policy, lease_expired) per policy. 
+
+asyncgate.lease
+
+5) DeleGate + Plan-as-artifact contract
+
+DeleGate MUST produce Plans as immutable work products stored in DepotGate, and Plans MUST include plan_id, principal_ai, tenant_id, caused_by_receipt_id. 
+
+Updated Specifications for Legi…
+
+DeleGate MAY mint obligations (tasks) and Plans; each minted obligation MUST be tied to provenance via receipts in ReceiptGate. 
+
+Updated Specifications for Legi…
+
+DeleGate MUST NOT execute tasks; execution is handled by workers across AsyncGate. 
+
+Updated Specifications for Legi…
+
+Integration “Lock List” (what you freeze before wiring repos)
+
+Freeze these interfaces + meanings, and everything else can stay flexible:
+
+Receipt phases + semantics + escalation routing/continuation invariants. 
+
+receipt.rules
+
+Tenant model (server-assigned; isolated). 
+
+receipt.rules
+
+ReceiptGate endpoints + immutability + multi-emitter rule. 
+
+Updated Specifications for Legi…
+
+AsyncGate offer/accept boundary + worker receipt obligations. 
+
+asyncgate.lease
+
+ 
+
+asyncgate.lease
+
+DeleGate authority + Plan-as-artifact provenance contract. 
+
+Updated Specifications for Legi…

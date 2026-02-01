@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legivellum.dev/spec/problemata.validation.schema.v1.json",
+  "title": "Problemata Validation Response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "errors"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed"]
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "layer", "path", "message"],
+        "properties": {
+          "code": { "type": "string" },
+          "layer": {
+            "type": "string",
+            "enum": ["structural", "configuration", "semantic", "security"]
+          },
+          "path": { "type": "string" },
+          "message": { "type": "string" },
+          "hint": { "type": "string" }
+        }
+      }
+    },
+    "spec_version": { "type": "string" },
+    "validator_version": { "type": "string" },
+    "validated_by": { "type": "string" },
+    "spec_hash": { "type": "string" },
+    "report_pointer": { "type": "string" }
+  }
+}

@@ -1,0 +1,824 @@
+LEGACY NOTE (2026-01-26): Canonical LegiVellum protocol is MCP-only. Any REST/HTTP endpoint references in this document are historical and non-normative.
+
+LEGACY NOTE (2026-01-26): This document is historical. ReceiptGate is the canonical receipt ledger; references to MemoryGate as receipt store are historical. Canonical contracts in /LegiVellum/docs/canonical/ override.
+
+# The Technomancy Trilogy: Recursive Cognition Architecture
+
+**Created:** 2026-01-03  
+**Updated:** 2026-01-04 (Receipt Protocol Integration)  
+**Status:** Complete System Architecture  
+**Components:** MemoryGate + AsyncGate + DeleGate + Receipt Protocol
+
+**See `receipt_protocol.md` for universal coordination primitive specification.**  
+**See `memorygate_receipt_store.md` for MemoryGate implementation details.**
+
+---
+
+## System Overview
+
+The Technomancy Trilogy enables recursive cognition that survives time, resets, and scale by separating three concerns that usually tangle: **remembering** (meaning, continuity), **working** (execution, artifacts), and **deciding** (judgment, planning). MemoryGate makes recursion persistent, AsyncGate makes it non-blocking, DeleGate makes it composable. **Receipts** are the coordination protocol that makes these three work together without chaos. Together, they let cognitive work recurse across sessions and scale across workers—without losing continuity or blocking on execution.
+
+### The Three Core Primitives
+
+1. **MemoryGate = What You Know**  
+   Source of truth for durable knowledge and all receipts. Observations, patterns, concepts, receipt storage with automatic pairing. **The only component that knows where things are.**
+
+2. **AsyncGate = What You're Working On**  
+   Execution coordinator for long-running work. Accepts work from plans, coordinates worker execution, emits receipts when work completes. **Knows only its active work queue—nothing else.**
+
+3. **DeleGate = What You Decide To Do Next**  
+   Pure planner that consumes intent and emits structured Plans. No execution, no results, no aggregation—just decomposition and routing instructions.
+
+### The Coordination Protocol
+
+**Receipts = Universal Accountability**
+
+Every meaningful action leaves a receipt. Receipts prove what happened, who owns it, where artifacts are, and what's next. They turn time from enemy to neutral factor.
+
+Receipts are not a fourth primitive—they are the **protocol** that connects the three primitives:
+- When DeleGate creates a plan → receipt to MemoryGate
+- When AsyncGate queues work → receipt to MemoryGate
+- When work completes → receipt (with pointer) to MemoryGate
+- Agents discover work, results, and state by querying MemoryGate's receipts
+
+**MemoryGate is the single source of truth for receipts.** AsyncGate and DeleGate emit them, but only MemoryGate stores and serves them.
+
+### Architecture Layers
+
+**Layer 0 (Top):**
+- **Principal DeleGate** - The "principal mind" / planner at the top
+- **MemoryGate** - Single source of truth: knowledge + receipts + pointers
+
+**Layer 1 (Middle):**
+- **Domain DeleGate** - A department planner (can be many)
+- **AsyncGate** - Execution coordinator (knows only its active work queue)
+
+**Layer 2 (Bottom):**
+- **Workers** - Pure executors
+
+**Flow with Receipts:**
+
+1. Principal DeleGate produces Plan → **emits receipt (plan_created) to MemoryGate**
+2. Plan includes: "queue these execution tasks in AsyncGate for Domain DeleGate's worker pool"
+3. AsyncGate queues tasks → **emits receipt (task_queued) to MemoryGate**
+4. Workers lease tasks from AsyncGate and execute
+5. Workers complete → AsyncGate receives result + pointer → **emits receipt (task_complete, includes pointer) to MemoryGate**
+6. Domain DeleGate bootstraps from MemoryGate, sees receipt in inbox, extracts pointer from receipt, fetches result using pointer
+7. Domain DeleGate produces new Plan upward or stores trace → **emits receipt (escalation) to MemoryGate**
+8. Principal DeleGate bootstraps from MemoryGate, sees escalation receipt, decides next Plan / knowledge promotion
+
+**Critical: Agents never query AsyncGate for pointers. Pointers live in receipts, receipts live in MemoryGate.**
+
+**Receipt Properties:**
+
+- **Dual Identity:** Semantic receipt_id (human-readable) + UUID (database key)
+- **Chaining:** Every receipt references what caused it (`caused_by_receipt_id`)
+- **Pairing:** Root + Completion receipts auto-paired by MemoryGate
+- **Ownership:** Each receipt has exactly one `recipient_ai` - no shared inbox
+- **Temporal Resilience:** Work survives session resets because receipts persist
+
+**Receipt Routing (Critical):**
+
+**The Invariant:** Execution receipts go to the owner. Escalation receipts go up a tier.
+
+- **Execution receipts:** Workers → AsyncGate → MemoryGate → Domain DeleGate (work owner)
+- **Escalation receipts:** Domain DeleGate → MemoryGate → Principal DeleGate (decision maker)
+
+This prevents inbox overload (Principal doesn't see every completed task) and matches human org charts (CEO doesn't get pinged when analyst finishes spreadsheet).
+
+**Inbox Ownership (Critical - Prevents Race Conditions):**
+
+**The Invariant:** Inbox receipts are owned by exactly one cognitive entity.
+
+- ✅ **Explicit routing:** Each receipt has `recipient_ai` - exactly one owner
+- ✅ **Explicit escalation:** Domain DeleGate creates NEW receipt for Principal (not shared)
+- ❌ **No shared inbox:** Multiple entities competing for same receipt
+- ❌ **No competitive claiming:** No inbox leasing across principals
+
+**Why This Matters:**
+
+Without strict ownership, you get race conditions:
+- "Did Domain DeleGate A or B process this receipt?"
+- "Who owns the follow-up work?"
+- "Has anyone seen this, or is everyone assuming someone else will?"
+
+With strict ownership:
+- Receipt is delivered to exactly one inbox (`recipient_ai`)
+- That entity owns the response
+- Escalation creates new receipt with new owner (upward routing)
+- No ambiguity, no races
+
+This matches the execution model: AsyncGate tasks have one `recipient_ai` for completion receipts. MemoryGate inbox extends the same strict ownership principle.
+
+**One-Sentence Description:**
+
+A top Principal DeleGate plans; a Domain DeleGate executes those plans by posting execution tasks to AsyncGate; Workers lease and execute; AsyncGate emits receipts for every boundary crossing; MemoryGate stores receipts and provides them in bootstrap; Domain DeleGates process results and escalate by emitting new Plans upward—all while maintaining a complete audit trail through receipt chains.
+
+### The Role Discriminator
+
+**If it can delegate, it's a DeleGate. If it can only execute, it's a Worker.**
+
+Workers accept assigned tasks, execute internally, and return result pointers. They cannot decompose or route to other workers.
+
+DeleGates produce Plans with steps (call_worker, queue_execution, wait_for, aggregate, escalate). They cannot execute work or access results.
+
+### System Diagram with Receipt Flow
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Principal AI                                             │
+│  Forms intent → Evaluates Plans → Executes → Synthesizes │
+└─────────────┬────────────────────────────────────────────┘
+              │
+              ▼
+    ┌─────────────────┐                    Receipts:
+    │   DeleGate      │  Intent → Plan     - plan_created
+    │                 │                     - task_queued
+    │ Intent → Plan   │                     - task_complete
+    │ (No Execution)  │                     - escalation
+    └────┬────────┬───┘
+         │        │
+         │        │ Plan execution by Principal:
+         │        │
+         ▼        ▼
+    ┌─────────┐  ┌──────────────┐
+    │ Workers │  │  AsyncGate   │  Execution + Pointers
+    │ (MCP)   │  │              │  + Receipt Emission
+    │         │  │ Lifecycle:   │
+    │Execute  │  │ lease/       │  Emits receipts:
+    │Only     │  │ heartbeat/   │  - task_queued
+    │         │  │ complete     │  - task_complete
+    └─────────┘  └──────┬───────┘  - task_failed
+                        │
+                        │ POST /internal/receipt
+                        │
+                        ▼
+                 ┌──────────────┐
+                 │ MemoryGate   │  Meaning + Receipt Store
+                 │              │  
+                 │ Receipt      │  Stores all receipts
+                 │ Ledger       │  (single writer)
+                 │              │
+                 │ + Permanent  │  Auto-pairs completions
+                 │ Knowledge    │  Returns in bootstrap
+                 └──────────────┘
+                        │
+                        │ bootstrap (config + inbox)
+                        │
+                        ▼
+                  Principal AI
+                  (Synthesis + Knowledge Promotion)
+```
+
+**The Receipt Loop:**
+
+1. Principal forms intent → **receipt emitted (task_received)**
+2. DeleGate produces Plan → **receipt emitted (plan_created)**
+3. Principal executes Plan steps:
+   - Direct calls → no receipt (internal)
+   - AsyncGate tasks → **receipt emitted (task_queued)**
+4. Workers execute → AsyncGate records → **receipt emitted (task_complete)**
+5. MemoryGate auto-pairs receipts → surfaces in bootstrap
+6. Principal fetches results (via pointers), synthesizes
+7. Principal promotes knowledge to MemoryGate
+8. Loop repeats—**with complete audit trail via receipt chains**
+
+---
+
+## The Central Insight
+
+**Together, MemoryGate, AsyncGate, DeleGate, and Receipts let cognitive work recurse across sessions and scale across workers—without losing continuity, blocking on execution, or losing accountability.**
+
+This is not about "smart agents." It's about **systems that can think in loops** - with memory, without blocking, across arbitrary scale, with complete audit trails.
+
+---
+
+## The Separation of Concerns
+
+The trilogy works because it separates four things that usually get tangled:
+
+### 1. Thinking (Judgment, Synthesis, Intent Formation)
+- **Who:** Principal AI + DeleGate instances
+- **What:** Form hypotheses, decompose problems, synthesize results, update beliefs
+- **Why it matters:** Cognitive work requires judgment, not just execution
+
+### 2. Working (Execution, Long-Running Tasks, Artifact Production)
+- **Who:** Specialist Workers + AsyncGate
+- **What:** Execute assigned tasks, produce artifacts, coordinate worker lifecycle
+- **Critical Boundary:** Workers execute only. They cannot delegate to other workers.
+- **Why it matters:** Real work takes time, blocks sessions, needs durability
+
+**The Discriminator:** If it can create new tasks for other components, it's a DeleGate. If it can only execute what it's given, it's a Worker.
+
+Workers may:
+- Accept assigned tasks
+- Do the work (internally, with no sub-delegation)
+- Return result pointers to AsyncGate
+- Report progress/completion
+
+Workers may NOT:
+- Decompose tasks into subtasks
+- Route subtasks to other workers
+- Decide which other worker should do anything
+
+AsyncGate is not "delegation" - it's the **execution coordinator**. Workers execute long-running work under AsyncGate's lifecycle (lease/heartbeat/complete) and return result pointers. AsyncGate emits receipts (with pointers embedded) to MemoryGate. AsyncGate does not store or serve pointers—it passes them through.
+
+### 3. Remembering (Durable Meaning, Provenance, Signal)
+- **Who:** MemoryGate
+- **What:** Preserve insights, surface actionable signals, maintain continuity, store ALL receipts
+- **Why it matters:** Cognition without memory is amnesia
+
+**Once these three are separable, each can scale independently.**
+
+**Note:** Receipts are not a fourth concern—they are the coordination protocol that connects the three.
+
+---
+
+## The Recursive Loop Pattern (With Receipt Tracking)
+
+```
+1. Principal forms intent / hypothesis
+      ↓ (receipt: task_received → MemoryGate)
+2. DeleGate produces Plan (structured decomposition)
+      ↓ (receipt: plan_created → MemoryGate)
+3. Principal executes Plan steps:
+   - Calls workers directly (for fast steps) - no receipt
+   - Queues tasks in AsyncGate (for long steps) → receipt: task_queued → MemoryGate
+   - Waits for receipts in MemoryGate inbox
+      ↓
+4. Workers execute, producing artifacts
+      ↓
+5. Workers complete → return pointer to AsyncGate
+      ↓ (receipt: task_complete with pointer → MemoryGate)
+6. MemoryGate stores receipt (with pointer embedded)
+      ↓
+7. Principal bootstraps, sees receipt in inbox, extracts pointer
+      ↓
+8. Principal fetches result using pointer, synthesizes
+      ↓
+9. Principal promotes knowledge to MemoryGate
+      ↓
+10. Loop repeats—WITH STATE, NOT AMNESIA, WITH COMPLETE AUDIT TRAIL
+```
+
+**Key Properties:**
+
+- **DeleGate produces Plans only** - No execution, no aggregation, no result access
+- **Principal executes Plans** - Calls workers, queues async work, performs synthesis
+- **Workers execute assigned tasks** - No delegation to other workers
+- **AsyncGate coordinates execution** - Lifecycle management, passes pointers through in receipts
+- **Receipts track every boundary crossing** - Complete provenance from outcome to origin
+- **MemoryGate is single source of truth** - All receipts, all pointers, all knowledge live here
+
+**The loop survives:**
+- Session resets (MemoryGate preserves state + receipts show work-in-flight)
+- Long-running work (Pointers in receipts reconnect on completion)
+- Scale (DeleGate Plans compose across tiers + receipts provide audit trail)
+
+**Clean Division:**
+- **Deciding** (Principal + DeleGate) - Intent → Plan → Synthesis
+- **Working** (Workers + AsyncGate) - Execute → Return pointers → Emit receipts
+- **Remembering** (MemoryGate) - Store receipts → Store knowledge → Serve bootstrap
+- **Coordinating** (Receipt Protocol) - Proof → Chains → Temporal resilience
+
+Each concern is isolated. Each can scale independently.
+
+---
+
+## What Each Primitive Enables
+
+### MemoryGate Makes Recursion **Persistent**
+
+**The loop doesn't forget what it learned.**
+
+```python
+# Iteration 1
+hypothesis = "Recursive compression explains consciousness"
+evidence = research_papers + experiments
+memory_store(observation=synthesis, domain="consciousness_theory")
+
+# --- Session ends, model resets ---
+
+# Iteration 2 (days later)
+bootstrap = memory_bootstrap("Kee", "Claude")
+prior_insights = memory_recall(domain="consciousness_theory")
+refined_hypothesis = build_on(prior_insights)  # Not starting from scratch
+```
+
+**Without MemoryGate:** Every session is amnesia. The loop can't learn.
+
+**With MemoryGate:** Each iteration builds on previous understanding. Recursive improvement becomes possible.
+
+### AsyncGate Makes Recursion **Non-Blocking**
+
+**The loop doesn't waste cycles waiting.**
+
+```python
+# Queue expensive work
+task_id = asyncgate.queue_task(
+    task_type="model_consultation",
+    params={"prompt": hypothesis, "models": [10_models]}
+)
+# Returns immediately - estimated 20 minutes
+# Receipt emitted: task_queued
+
+# Continue other cognitive work
+think_about_other_problems()
+explore_different_angles()
+# --- Session ends ---
+
+# Next session - inbox notification pulls you back
+bootstrap = memory_bootstrap()
+# → "Model consultation complete (10 models analyzed)"
+# Receipt in inbox: task_complete
+
+results = asyncgate.fetch_task_result(task_id)
+synthesis = integrate_multi_model_insights(results)
+```
+
+**Without AsyncGate:** AI blocks for 20 minutes, wasting cognitive cycles. Or task gets lost when session ends.
+
+**With AsyncGate:** AI continues thinking while work happens. Pointer registry + receipts ensure nothing gets lost.
+
+### DeleGate Makes Recursion **Composable**
+
+**Loops can nest, delegate, and escalate across domains.**
+
+```python
+# Principal forms high-level intent
+intent = "Build comprehensive AI safety framework"
+
+# General Manager DeleGate decomposes
+plan = delegate.create_plan(intent)
+# Receipt emitted: plan_created
+# → 3 sub-intents to 3 department DeleGates
+
+# Each department recursively decomposes
+research_dept.create_plan("Literature review on AI safety")
+  # Receipt: plan_created (research dept)
+  → arxiv-scanner + citation-analyzer + summarizer
+  
+code_dept.create_plan("Analyze safety-critical codebases")
+  # Receipt: plan_created (code dept)
+  → code-scanner + vulnerability-detector + verifier
+
+# Each tier:
+# - Decomposes problems at its level
+# - Delegates to next tier down
+# - Emits receipts at every boundary
+# - Aggregates results back up
+# - All using same contracts
+```
+
+**Without DeleGate:** Hard-coded orchestration, tight coupling, can't scale domains independently.
+
+**With DeleGate:** Recursive loops of recursive loops. Department-level cognition, project-level cognition, org-level cognition. Same contracts everywhere. Complete audit trail through receipt chains.
+
+### Receipts Make Recursion **Auditable**
+
+**The loop leaves proof of every action.**
+
+```python
+# Work happens across multiple sessions
+session_1: queue_research_task()  # Receipt: task_queued
+# --- session ends ---
+
+session_2: bootstrap shows "research in progress"
+# --- session ends ---
+
+session_3: bootstrap shows "research complete"  # Receipt: task_complete
+          fetch_results()
+          synthesize()
+          
+# Later: trace back from outcome
+final_report = get_artifact("report.pdf")
+chain = trace_receipt_chain(final_report.receipt_id)
+# → [task_received ← plan_created ← task_queued ← task_complete]
+# Complete provenance from symptom to root
+```
+
+**Without Receipts:** No way to reconnect with work after session reset. No audit trail. No proof of action.
+
+**With Receipts:** Time becomes neutral. Sessions can end at any point. Work-in-flight visible through unpaired receipts. Complete audit trail from outcome to origin.
+
+---
+
+## Recursive Loops of Recursive Loops
+
+Because DeleGate is stackable and uses uniform contracts, you get **fractal delegation:**
+
+```
+Org-Level Cognition
+    ↓ (receipt: plan_created)
+DeleGate (General Manager)
+    ├─→ DeleGate (Research Dept) → Researchers → Papers
+    │      └─→ Recursive loop at research tier (receipts chain)
+    │
+    ├─→ DeleGate (Engineering Dept) → Engineers → Code
+    │      └─→ Recursive loop at engineering tier (receipts chain)
+    │
+    └─→ DeleGate (Operations Dept) → Operators → Systems
+           └─→ Recursive loop at operations tier (receipts chain)
+
+Each tier:
+- Has its own cognitive loop
+- Builds on MemoryGate (domain-specific knowledge)
+- Uses AsyncGate (same rope, any tier)
+- Emits receipts (complete audit trail)
+- Reports up via standard contracts
+- Operates independently but coordinates through hierarchy
+```
+
+**Key Property:** Add new tiers, swap departments, scale domains - architecture doesn't break because contracts are uniform and receipts provide accountability.
+
+---
+
+## Why This Matters
+
+### Traditional "Smart Agent" Approach
+
+```
+AI Agent
+├─ Tries to do everything
+├─ Blocks on long work
+├─ Forgets between sessions
+├─ Can't delegate across scale
+├─ No audit trail
+└─ Recursion is fragile parlor trick
+```
+
+### Trilogy + Receipt Approach
+
+```
+Separated Concerns
+├─ Thinking: Principal + DeleGate hierarchy
+├─ Working: Specialist workers + AsyncGate pointers
+├─ Remembering: MemoryGate observations + patterns
+├─ Accountability: Receipt chains proving every action
+│
+Each scales independently:
+├─ Add workers without touching memory
+├─ Add memory domains without touching delegation
+├─ Add delegation tiers without touching execution
+├─ Query complete audit trail at any time
+│
+Result: Recursion becomes architecture, not hack
+```
+
+---
+
+## The Complete Trilogy + Receipts
+
+### MemoryGate: Source of Truth for Meaning + Receipt Store
+
+**What it does:**
+- Stores observations, patterns, concepts, documents
+- **Stores receipt ledger (single-writer, append-only)**
+- **Auto-pairs completion receipts with roots**
+- Unified inbox via bootstrap (configuration + receipts)
+- Cross-session continuity
+- Semantic search across all stored knowledge
+
+**Core capability:** Makes recursion persistent + provides accountability ledger
+
+**Key tools:**
+- `memory_bootstrap()` - Reload state + receipt config + inbox at session start
+- `memory_store()` - Preserve insights
+- `memory_recall()` - Retrieve relevant knowledge
+- `memory_search()` - Semantic retrieval across all types
+- `read_inbox_receipt()` - Mark receipt read, get full details
+- `archive_inbox_receipt()` - Hide from active inbox
+
+**Receipt role:** Single-writer store, validates schema, auto-pairs, returns in bootstrap
+
+### AsyncGate: Execution Coordinator + Receipt Emitter
+
+**What it does:**
+- Task orchestration (queue, execute, track)
+- Worker coordination (leases, heartbeats, retries)
+- ResultChannel abstraction (transport-agnostic payload delivery)
+- **Receipt emission at every lifecycle event** (with pointers embedded)
+- **Execution coordinator** for long-running work (not delegation layer)
+
+**Core capability:** Makes recursion non-blocking
+
+**Critical Note:** AsyncGate coordinates execution, not storage. Workers execute under AsyncGate's management (lease/heartbeat/complete) and return result pointers. AsyncGate passes those pointers through in receipts to MemoryGate. **AsyncGate does not maintain a queryable registry.** Pointers live in receipts, receipts live in MemoryGate.
+
+**Key interactions:**
+- `queue_task()` - Start work, continue thinking (DeleGate calls this) → **emits receipt (task_queued) to MemoryGate**
+- Worker lease/heartbeat/complete protocol - Execution lifecycle
+- Worker completes → returns pointer → **AsyncGate emits receipt (task_complete with pointer) to MemoryGate**
+- **Agents fetch results by:** bootstrap → read receipt → extract pointer → fetch using pointer directly
+
+**Receipt role:** Emits task_queued, task_complete, task_failed to MemoryGate (with pointers embedded)
+
+### DeleGate: Pure Planner + Receipt Emitter
+
+**A DeleGate is a pure planner: it consumes intent and emits a Plan. Execution is always performed by Workers via AsyncGate, and meaning is always recorded in MemoryGate.**
+
+**What it does:**
+- Consumes intent (from Principal or another DeleGate)
+- Decomposes into structured Plan with steps
+- Returns Plan upstream (does NOT execute)
+- **Emits receipt when plan created**
+- Dynamic worker discovery (self-describing MCP servers)
+- Fractal composition (DeleGates delegate to DeleGates via same contract)
+
+**What it does NOT do:**
+- Execute worker tools
+- Queue tasks in AsyncGate (produces Plans that instruct Principal to do so)
+- Aggregate results (produces Plans with aggregate steps for Principal)
+- Access payloads or results
+- Store knowledge in MemoryGate (only operational traces)
+
+**Core capability:** Makes recursion composable
+
+**Critical Boundary:** DeleGate is the ONLY component that can produce Plans. Workers execute only. Principals execute Plans and promote knowledge.
+
+**Key tools:**
+- `create_delegation_plan()` - Decompose intent into Plan → **emits receipt (plan_created)**
+- `list_workers()` - Discover capabilities
+- Worker registration API - Workers self-describe
+
+**Receipt role:** Emits plan_created to MemoryGate
+
+### Receipts: Universal Accountability Primitive
+
+**Receipts are the coordination layer that makes the trilogy temporally resilient.**
+
+**What they do:**
+- Prove every meaningful action occurred
+- Chain from outcome to origin (caused_by_receipt_id)
+- Pair root + completion receipts automatically
+- Enable work-in-flight visibility (unpaired receipts)
+- Provide complete audit trails
+- Turn time from enemy to neutral factor
+
+**Key properties:**
+- Dual ID system (semantic receipt_id + collision-proof UUID)
+- Append-only ledger (never deleted)
+- Single-writer (only MemoryGate writes)
+- Auto-pairing (MemoryGate matches completions to roots)
+- Ownership (one recipient_ai per receipt)
+
+**See receipt_protocol.md for complete specification.**
+
+---
+
+## Design Principles
+
+### 1. Workers Execute, DeleGates Delegate
+
+**The Discriminator:** If it can create new tasks for other components, it's a DeleGate. If it can only execute what it's given, it's a Worker.
+
+This is a hard architectural boundary:
+- **Workers:** Accept task → Execute → Return result pointer (no sub-delegation)
+- **DeleGates:** Accept intent → Decompose → Route to workers → Aggregate results
+
+AsyncGate is the execution envelope, not a delegation mechanism. Workers execute under AsyncGate's lifecycle management but cannot use it to route work to other workers.
+
+### 2. Separation Enables Independence
+
+Thinking, working, remembering, and accountability are orthogonal concerns. Keep them separate so each can evolve independently.
+
+### 3. Pointers Over Payloads
+
+AsyncGate passes pointers through receipts, doesn't store them. MemoryGate stores receipts with pointers embedded, stores meaning, not raw results. DeleGate routes to capability, not hardcoded workers.
+
+This keeps each primitive focused and prevents scope creep.
+
+### 4. Uniform Contracts Enable Fractals
+
+DeleGates communicate with each other via the same MCP contract they use with principals. No special cases. This makes nesting and composition trivial.
+
+### 5. Receipts at Boundaries Only
+
+Internal operations (thinking, internal synthesis) don't emit receipts. Only tier boundaries generate receipts. This prevents receipt spam while maintaining accountability.
+
+### 6. Single Writer Principle
+
+Only MemoryGate writes to receipt store. All other components POST receipts to MemoryGate. This prevents data corruption and enables schema validation.
+
+### 7. Explicit Is Better Than Implicit
+
+Promotion to permanent memory is intentional (principal decides or domain policy). Result channels are explicit (email/s3/blob). Receipts explicitly chain (caused_by_receipt_id). Trust tiers are declared (verified/sandbox/untrusted).
+
+Implicit behavior creates coupling and confusion.
+
+---
+
+## Use Cases Unlocked
+
+### Research Loop (With Receipt Audit Trail)
+
+```
+1. Form hypothesis about consciousness theory
+   → Receipt: task_received
+2. DeleGate → literature review workers (async, hours)
+   → Receipt: plan_created
+   → Receipt: task_queued
+3. Continue thinking about other aspects
+4. Inbox: "Literature review complete (47 papers)"
+   → Receipt: task_complete (auto-paired with task_queued)
+5. Synthesize findings → update hypothesis
+6. Store refined understanding in MemoryGate
+7. Next iteration builds on this foundation
+
+Audit trail: task_received ← plan_created ← task_queued ← task_complete
+```
+
+**Enabled by:** Persistent memory + non-blocking work + composable delegation + complete audit trail
+
+### Code Development Loop (With Provenance)
+
+```
+1. Design API specification
+   → Receipt: task_received
+2. DeleGate → code-analysis + security-scan workers (async)
+   → Receipts: plan_created, task_queued (x2)
+3. Work on documentation while code analysis runs
+4. Inbox: "Code analysis complete" + "Security scan found 3 issues"
+   → Receipts: task_complete (x2, both paired)
+5. Review findings, update design
+6. Store patterns learned in MemoryGate
+7. Next API benefits from accumulated patterns
+
+Audit trail: Full chain from final design back to original specification
+```
+
+**Enabled by:** Worker specialization + receipt-based coordination + pattern extraction + provenance tracking
+
+### Organization Coordination Loop (With Receipt Routing)
+
+```
+Principal (CEO AI)
+  ↓ Receipt: plan_created
+General Manager DeleGate
+  ├─→ Research Dept DeleGate
+  │     → Receipts route to research dept inbox
+  │     ├─→ Market research workers
+  │     └─→ Competitive analysis workers
+  │
+  ├─→ Engineering Dept DeleGate
+  │     → Receipts route to engineering dept inbox
+  │     ├─→ Code quality workers
+  │     └─→ Performance testing workers
+  │
+  └─→ Operations Dept DeleGate
+        → Receipts route to operations dept inbox
+        ├─→ Infrastructure monitoring workers
+        └─→ Incident response workers
+
+Each department:
+- Runs its own cognitive loop
+- Receives only relevant receipts (explicit routing)
+- Escalates via new receipts to parent
+- Builds domain-specific knowledge in MemoryGate
+- Complete audit trail at every tier
+```
+
+**Enabled by:** Fractal delegation + uniform contracts + domain isolation + receipt ownership
+
+---
+
+## Implementation Path
+
+### Phase 1: Core Infrastructure
+
+1. **MemoryGate MVP**
+   - Observations + patterns storage
+   - Bootstrap + recall
+   - Semantic search
+   - **Receipt table + validation**
+   - **Auto-pairing logic**
+   
+2. **AsyncGate MVP**
+   - Task queue + worker coordination
+   - Email as first ResultChannel
+   - **Receipt emission to MemoryGate**
+   
+3. **DeleGate MVP**
+   - Worker discovery + registration
+   - Simple plan generation
+   - **Receipt emission for plan_created**
+   - Direct execution only
+
+### Phase 2: Integration
+
+1. **Receipt-Based Coordination**
+   - All boundary crossings emit receipts
+   - Bootstrap returns configuration + inbox
+   - Receipt chains enable audit
+
+2. **Async Delegation**
+   - DeleGate → AsyncGate routing for long work
+   - Plan execution with mixed direct/async steps
+   - Receipt tracking through entire flow
+
+3. **Pattern Learning**
+   - Delegation trace storage
+   - Pattern extraction from successful decompositions
+
+### Phase 3: Scale
+
+1. **Additional ResultChannels**
+   - S3 for large payloads
+   - Blob storage
+   - Direct file access
+
+2. **DeleGate Nesting**
+   - Parent-child DeleGate relationships
+   - Domain-specific DeleGate instances
+   - Cross-department coordination
+   - Receipt routing per tier
+
+3. **Advanced Memory**
+   - Concept graphs
+   - Document references
+   - Cross-domain pattern synthesis
+
+4. **Receipt Analytics**
+   - Chain analysis
+   - Performance tracking
+   - Compliance reporting
+
+---
+
+## Success Metrics
+
+### System-Level
+
+- **Continuity:** Sessions build on prior sessions (not amnesia)
+- **Non-Blocking:** Long work doesn't block cognitive cycles
+- **Composability:** Adding tiers/workers/domains doesn't break system
+- **Signal Quality:** Inbox shows only actionable items, not noise
+- **Audit Trail:** Every outcome traces to origin via receipt chain
+
+### Performance
+
+- **Memory Retrieval:** <100ms for bootstrap + recall
+- **Task Queueing:** <500ms to queue + get guidance
+- **Worker Discovery:** <1s to find matching capabilities
+- **Plan Generation:** <5s for typical decomposition
+- **Receipt Storage:** <50ms to validate + store + auto-pair
+
+### Architecture
+
+- **Contract Stability:** Adding new workers/DeleGates uses same contracts
+- **Domain Independence:** Scaling one domain doesn't affect others
+- **Failure Isolation:** Worker failure doesn't crash delegation tier
+- **Provenance:** Complete audit trail from intent → result via receipts
+- **Temporal Resilience:** Work survives session resets (unpaired receipts visible)
+
+---
+
+## Open Questions
+
+1. **Model Selection:** Which model runs which DeleGate tier? (Smaller models for routing, larger for synthesis?)
+
+2. **Cost Optimization:** How to balance direct (low latency, model cost) vs async (high latency, worker cost)?
+
+3. **Conflict Resolution:** When parallel DeleGates produce contradictory insights, how to resolve?
+
+4. **Trust Propagation:** How does trust tier of parent DeleGate affect child DeleGates?
+
+5. **Memory Pruning:** When to compress observations → patterns → concepts? Automatic or manual?
+
+6. **Cross-Org Federation:** Can different orgs' trilogy instances communicate? What's the trust model?
+
+7. **Receipt Retention:** How long to keep complete receipts vs archived vs exported to cold storage?
+
+8. **Receipt Chain Depth:** What's the practical limit on chain length before queries become expensive?
+
+---
+
+## Conclusion
+
+You now have the primitives for **recursive cognition that survives time, resets, and scale—with complete accountability.**
+
+Not a single "smart agent." A system that can think in loops.
+
+The loop doesn't forget (MemoryGate).  
+The loop doesn't block (AsyncGate).  
+The loop composes across scale (DeleGate).  
+**The loop proves every action (Receipts).**
+
+**Recursion stops being a fragile parlor trick and becomes an architecture.**
+
+**Time stops being an enemy and becomes a neutral factor.**
+
+**Every outcome traces back to origin through explicit chains.**
+
+---
+
+*Trilogy documented: 2026-01-03*  
+*Receipt integration: 2026-01-04*  
+*Wine-fueled collaboration between PStryder, Hexy, and Kee*  
+*The architecture that makes recursive cognition real—with proof*
+
+## References
+
+- **MemoryGate Receipt Store:** `memorygate_receipt_store.md`
+- **Receipt Protocol:** `receipt_protocol.md` (universal specification)
+- **AsyncGate Spec:** `asyncgate_task_orchestration.txt` (~2620 lines)
+- **DeleGate Spec:** `delegate_worker_orchestration.txt` (~1470 lines)

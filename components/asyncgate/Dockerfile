@@ -36,9 +36,9 @@ ENV RUN_MODE=rest
 
 EXPOSE 8002
 
-# Health check (only applies to REST mode)
+# Health check (MCP tools/call)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:${PORT}/health').raise_for_status()" || exit 0
+    CMD python -c "import json, os, urllib.request; port=os.environ.get('PORT','8002'); url=f'http://localhost:{port}/mcp'; payload={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'asyncgate.health','arguments':{}}}; req=urllib.request.Request(url, data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}); resp=urllib.request.urlopen(req, timeout=5); data=json.load(resp); assert 'result' in data" || exit 0
 
 # Entrypoint script to support both REST and MCP modes
 # RUN_MODE=rest (default) -> FastAPI server
