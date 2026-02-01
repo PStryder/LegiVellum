@@ -26,6 +26,16 @@ TEST_DATABASE_URL = os.getenv(
 TEST_TENANT_ID = "test_tenant"
 TEST_API_KEY = f"test-key-{TEST_TENANT_ID}"
 
+def _strip_sql_comments(schema_sql: str) -> str:
+    """Remove full-line SQL comments for naive statement splitting."""
+    lines = []
+    for line in schema_sql.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
 
 # =============================================================================
 # Async Event Loop
@@ -76,14 +86,16 @@ async def test_db_setup(test_engine):
     ]
     
     async with test_engine.begin() as conn:
+        for table in ("receipts", "tasks", "plans", "workers"):
+            await conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
         for schema_file in schema_files:
             if os.path.exists(schema_file):
                 with open(schema_file) as f:
-                    schema_sql = f.read()
+                    schema_sql = _strip_sql_comments(f.read())
                     # Execute schema (skip comments and empty lines)
                     for statement in schema_sql.split(";"):
                         statement = statement.strip()
-                        if statement and not statement.startswith("--"):
+                        if statement:
                             await conn.execute(text(statement))
     
     yield

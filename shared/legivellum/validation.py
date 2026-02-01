@@ -172,7 +172,7 @@ def validate_phase_constraints(data: dict[str, Any]) -> list[ValidationError]:
     return errors
 
 
-def validate_receipt(data: dict[str, Any]) -> list[ValidationError]:
+def validate_receipt(data: dict[str, Any], *, validate_schema: bool = True) -> list[ValidationError]:
     """
     Validate receipt data before storage.
     Returns list of validation errors (empty if valid).
@@ -189,7 +189,7 @@ def validate_receipt(data: dict[str, Any]) -> list[ValidationError]:
     errors.extend(validate_routing_invariant(data))
     
     # JSON Schema validation (if available)
-    if JSONSCHEMA_AVAILABLE:
+    if validate_schema and JSONSCHEMA_AVAILABLE:
         errors.extend(validate_json_schema(data))
 
     return errors
@@ -249,7 +249,7 @@ def validate_receipt_create(receipt_create: ReceiptCreate, tenant_id: str) -> Re
 
     # Pre-validate field sizes
     data = receipt_create.model_dump()
-    errors = validate_receipt(data)
+    errors = validate_receipt(data, validate_schema=False)
 
     if errors:
         raise ValidationError(

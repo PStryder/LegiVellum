@@ -19,6 +19,16 @@ TEST_DATABASE_URL = os.getenv(
 ALICE_KEY = "dev-key-alice"
 BOB_KEY = "dev-key-bob"
 
+def _strip_sql_comments(schema_sql: str) -> str:
+    """Remove full-line SQL comments for naive statement splitting."""
+    lines = []
+    for line in schema_sql.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -48,12 +58,14 @@ def _set_integration_env():
 async def integration_engine():
     engine = create_async_engine(TEST_DATABASE_URL, echo=False, pool_pre_ping=True)
     schema_path = _repo_root() / "schema" / "init.sql"
-    schema_sql = schema_path.read_text(encoding="utf-8")
+    schema_sql = _strip_sql_comments(schema_path.read_text(encoding="utf-8"))
     try:
         async with engine.begin() as conn:
+            for table in ("receipts", "tasks", "plans", "workers"):
+                await conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
             for statement in schema_sql.split(";"):
                 stmt = statement.strip()
-                if not stmt or stmt.startswith("--"):
+                if not stmt:
                     continue
                 await conn.execute(text(stmt))
     except Exception as exc:
@@ -148,6 +160,7 @@ def asyncgate_app(memorygate_app):
         return receipt_id
 
     module.lease_expiry_worker = _noop_worker
+    module.emit_receipt_with_retry = _emit_receipt_with_retry
     receipt_emitter.retry_worker = _noop_worker
     receipt_emitter.stop_retry_worker = lambda: None
     receipt_emitter.emit_receipt_with_retry = _emit_receipt_with_retry
@@ -157,13 +170,15 @@ def asyncgate_app(memorygate_app):
 
 @pytest_asyncio.fixture(scope="session")
 async def memorygate_client(memorygate_app, integration_engine):
-    transport = httpx.ASGITransport(app=memorygate_app, lifespan="on")
-    async with httpx.AsyncClient(transport=transport, base_url="http://memorygate.test") as client:
-        yield client
+    async with memorygate_app.router.lifespan_context(memorygate_app):
+        transport = httpx.ASGITransport(app=memorygate_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://memorygate.test") as client:
+            yield client
 
 
 @pytest_asyncio.fixture(scope="session")
 async def asyncgate_client(asyncgate_app, integration_engine):
-    transport = httpx.ASGITransport(app=asyncgate_app, lifespan="on")
-    async with httpx.AsyncClient(transport=transport, base_url="http://asyncgate.test") as client:
-        yield client
+    async with asyncgate_app.router.lifespan_context(asyncgate_app):
+        transport = httpx.ASGITransport(app=asyncgate_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://asyncgate.test") as client:
+            yield client
