@@ -7,7 +7,7 @@ Based on spec/receipt.rules.md and schema/receipts.sql
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import ulid
 
 
@@ -132,6 +132,8 @@ class Receipt(BaseModel):
     # Freeform metadata
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
+    model_config = ConfigDict(use_enum_values=True)
+
     @model_validator(mode='after')
     def validate_phase_constraints(self) -> 'Receipt':
         """Validate phase-specific constraints per spec/receipt.rules.md"""
@@ -201,9 +203,6 @@ class Receipt(BaseModel):
 
         return self
 
-    class Config:
-        use_enum_values = True
-
 
 class ReceiptCreate(BaseModel):
     """
@@ -263,8 +262,7 @@ class ReceiptCreate(BaseModel):
     # Metadata
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class ReceiptResponse(BaseModel):
