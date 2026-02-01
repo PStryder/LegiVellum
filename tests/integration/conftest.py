@@ -5,6 +5,7 @@ from pathlib import Path
 from importlib.util import module_from_spec, spec_from_file_location
 
 import pytest
+import pytest_asyncio
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
@@ -43,7 +44,7 @@ def _set_integration_env():
     os.environ.setdefault("ASYNCGATE_URL", "http://asyncgate.test")
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def integration_engine():
     engine = create_async_engine(TEST_DATABASE_URL, echo=False, pool_pre_ping=True)
     schema_path = _repo_root() / "schema" / "init.sql"
@@ -64,7 +65,7 @@ async def integration_engine():
     await engine.dispose()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def integration_session(integration_engine) -> AsyncSession:
     session_maker = async_sessionmaker(integration_engine, class_=AsyncSession, expire_on_commit=False)
     async with session_maker() as session:
@@ -72,7 +73,7 @@ async def integration_session(integration_engine) -> AsyncSession:
         await session.rollback()
 
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def cleanup_database(integration_session: AsyncSession):
     for table in ("receipts", "tasks", "plans", "workers"):
         try:
@@ -154,14 +155,14 @@ def asyncgate_app(memorygate_app):
     return module.app
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def memorygate_client(memorygate_app, integration_engine):
     transport = httpx.ASGITransport(app=memorygate_app, lifespan="on")
     async with httpx.AsyncClient(transport=transport, base_url="http://memorygate.test") as client:
         yield client
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def asyncgate_client(asyncgate_app, integration_engine):
     transport = httpx.ASGITransport(app=asyncgate_app, lifespan="on")
     async with httpx.AsyncClient(transport=transport, base_url="http://asyncgate.test") as client:

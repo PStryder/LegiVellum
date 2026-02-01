@@ -155,7 +155,7 @@ class HeartbeatResponse(BaseModel):
 class TaskCompleteRequest(BaseModel):
     """Worker request to mark task complete"""
     worker_id: str
-    status: str = Field(..., regex="^(success|failure|canceled)$")
+    status: str = Field(..., pattern="^(success|failure|canceled)$")
 
     # Outcome
     outcome_kind: str = Field(default="none", description="Type of outcome")

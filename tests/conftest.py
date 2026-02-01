@@ -4,6 +4,7 @@ Pytest Configuration and Shared Fixtures for LegiVellum Tests
 Provides test database setup, fixtures, and utilities for integration testing.
 """
 import pytest
+import pytest_asyncio
 import os
 import asyncio
 from typing import AsyncGenerator, Generator
@@ -42,7 +43,7 @@ def event_loop() -> Generator:
 # Database Fixtures
 # =============================================================================
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def test_engine():
     """Create test database engine"""
     engine = create_async_engine(
@@ -50,13 +51,20 @@ async def test_engine():
         echo=False,
         pool_pre_ping=True,
     )
+
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        await engine.dispose()
+        pytest.skip(f"Test database unavailable: {exc}")
     
     yield engine
     
     await engine.dispose()
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def test_db_setup(test_engine):
     """Setup test database schema"""
     # Read schema files
@@ -88,7 +96,7 @@ async def test_db_setup(test_engine):
         await conn.execute(text("DROP TABLE IF EXISTS workers CASCADE"))
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_session(test_engine, test_db_setup) -> AsyncGenerator[AsyncSession, None]:
     """Create test database session"""
     async_session = async_sessionmaker(
@@ -102,7 +110,7 @@ async def test_session(test_engine, test_db_setup) -> AsyncGenerator[AsyncSessio
         await session.rollback()  # Rollback after each test
 
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def cleanup_database(test_session):
     """Clean database between tests"""
     yield
@@ -185,7 +193,7 @@ def sample_receipt_data(tenant_id):
 # HTTP Client Fixtures
 # =============================================================================
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def memorygate_client(auth_headers):
     """HTTP client for MemoryGate"""
     from httpx import AsyncClient
@@ -196,14 +204,14 @@ async def memorygate_client(auth_headers):
     return None  # Placeholder
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def asyncgate_client(auth_headers):
     """HTTP client for AsyncGate"""
     from httpx import AsyncClient
     return None  # Placeholder
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def delegate_client(auth_headers):
     """HTTP client for DeleGate"""
     from httpx import AsyncClient

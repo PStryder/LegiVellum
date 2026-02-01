@@ -90,6 +90,88 @@ def validate_routing_invariant(data: dict[str, Any]) -> list[ValidationError]:
     return errors
 
 
+def validate_phase_constraints(data: dict[str, Any]) -> list[ValidationError]:
+    """
+    Validate phase-specific constraints for partially-populated receipts.
+    Only checks fields present in the payload.
+    """
+    errors: list[ValidationError] = []
+    phase = data.get("phase")
+    if not phase:
+        return errors
+
+    try:
+        phase_value = Phase(phase) if not isinstance(phase, Phase) else phase
+    except ValueError:
+        return errors
+
+    def _error(message: str, field: str, constraint: str) -> None:
+        errors.append(ValidationError(message=message, field=field, constraint=constraint))
+
+    if phase_value == Phase.ACCEPTED:
+        status = data.get("status")
+        if status is not None and status != "NA":
+            _error("status must be 'NA' for accepted phase", "status", "phase_accepted")
+        if "completed_at" in data and data.get("completed_at") is not None:
+            _error("completed_at must be null for accepted phase", "completed_at", "phase_accepted")
+        if data.get("task_summary") == "TBD":
+            _error("task_summary must not be 'TBD' for accepted phase", "task_summary", "phase_accepted")
+        outcome_kind = data.get("outcome_kind")
+        if outcome_kind is not None and outcome_kind != "NA":
+            _error("outcome_kind must be 'NA' for accepted phase", "outcome_kind", "phase_accepted")
+        escalation_class = data.get("escalation_class")
+        if escalation_class is not None and escalation_class != "NA":
+            _error("escalation_class must be 'NA' for accepted phase", "escalation_class", "phase_accepted")
+
+    elif phase_value == Phase.COMPLETE:
+        status = data.get("status")
+        if status is not None and status not in ("success", "failure", "canceled"):
+            _error(
+                "status must be 'success', 'failure', or 'canceled' for complete phase",
+                "status",
+                "phase_complete",
+            )
+        if "completed_at" in data and data.get("completed_at") is None:
+            _error("completed_at is required for complete phase", "completed_at", "phase_complete")
+        outcome_kind = data.get("outcome_kind")
+        if outcome_kind is not None and outcome_kind in ("NA", "TBD"):
+            _error("outcome_kind must be a valid value for complete phase", "outcome_kind", "phase_complete")
+        escalation_class = data.get("escalation_class")
+        if escalation_class is not None and escalation_class != "NA":
+            _error("escalation_class must be 'NA' for complete phase", "escalation_class", "phase_complete")
+
+    elif phase_value == Phase.ESCALATE:
+        status = data.get("status")
+        if status is not None and status != "NA":
+            _error("status must be 'NA' for escalate phase", "status", "phase_escalate")
+        escalation_class = data.get("escalation_class")
+        if escalation_class is not None and escalation_class in ("NA", "TBD"):
+            _error(
+                "escalation_class must be a valid escalation value for escalate phase",
+                "escalation_class",
+                "phase_escalate",
+            )
+        escalation_reason = data.get("escalation_reason")
+        if escalation_reason is not None and escalation_reason in ("NA", "TBD"):
+            _error("escalation_reason must be provided for escalate phase", "escalation_reason", "phase_escalate")
+        escalation_to = data.get("escalation_to")
+        if escalation_to is not None and escalation_to == "NA":
+            _error("escalation_to is required for escalate phase", "escalation_to", "phase_escalate")
+        recipient_ai = data.get("recipient_ai")
+        if escalation_to is not None and recipient_ai is not None and recipient_ai != escalation_to:
+            _error(
+                "recipient_ai must equal escalation_to for escalate phase",
+                "recipient_ai",
+                "phase_escalate",
+            )
+
+    # Retry rule (only if both provided)
+    if data.get("retry_requested") and data.get("attempt", 0) < 1:
+        _error("attempt must be >= 1 when retry_requested is true", "attempt", "retry_requested")
+
+    return errors
+
+
 def validate_receipt(data: dict[str, Any]) -> list[ValidationError]:
     """
     Validate receipt data before storage.
@@ -99,6 +181,9 @@ def validate_receipt(data: dict[str, Any]) -> list[ValidationError]:
 
     # Field size validation
     errors.extend(validate_field_sizes(data))
+
+    # Phase-specific constraints
+    errors.extend(validate_phase_constraints(data))
 
     # Routing invariant
     errors.extend(validate_routing_invariant(data))
