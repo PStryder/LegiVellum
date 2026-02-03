@@ -2,7 +2,7 @@
 LegiVellum Receipt Models
 
 Pydantic models for the LegiVellum receipt protocol.
-Based on spec/receipt.rules.md and schema/receipts.sql
+Based on spec/receipt.rules.md and spec/receipt.schema.v1.json.
 """
 from datetime import datetime
 from enum import Enum
@@ -132,7 +132,7 @@ class Receipt(BaseModel):
     # Freeform metadata
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
 
     @model_validator(mode='after')
     def validate_phase_constraints(self) -> 'Receipt':
@@ -262,7 +262,7 @@ class ReceiptCreate(BaseModel):
     # Metadata
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
 
 
 class ReceiptResponse(BaseModel):
