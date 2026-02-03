@@ -577,6 +577,66 @@ async def heartbeat(lease_id: str, worker_id: str) -> dict[str, Any]:
     }
 
 
+@mcp.tool()
+async def expire_leases() -> dict[str, Any]:
+    """
+    Expire stale leases and emit escalation receipts when retries are exhausted.
+    """
+    tenant_id = DEFAULT_TENANT
+    now = datetime.utcnow()
+
+    async with get_session() as session:
+        query = text("""
+            SELECT * FROM tasks
+            WHERE tenant_id = :tenant_id
+              AND status = 'leased'
+              AND lease_expires_at < :now
+        """)
+
+        result = await session.execute(query, {"tenant_id": tenant_id, "now": now})
+        expired_rows = result.mappings().all()
+
+        for row in expired_rows:
+            can_retry = row["attempt"] + 1 < row["max_attempts"]
+
+            if can_retry:
+                update_sql = text("""
+                    UPDATE tasks SET
+                        status = 'queued',
+                        lease_id = NULL,
+                        worker_id = NULL,
+                        lease_expires_at = NULL,
+                        attempt = attempt + 1
+                    WHERE task_id = :task_id AND tenant_id = :tenant_id
+                """)
+                await session.execute(update_sql, {
+                    "task_id": row["task_id"],
+                    "tenant_id": tenant_id,
+                })
+            else:
+                update_sql = text("""
+                    UPDATE tasks SET
+                        status = 'expired',
+                        completed_at = NOW()
+                    WHERE task_id = :task_id AND tenant_id = :tenant_id
+                """)
+                await session.execute(update_sql, {
+                    "task_id": row["task_id"],
+                    "tenant_id": tenant_id,
+                })
+
+                await _emit_escalate_receipt(
+                    tenant_id=tenant_id,
+                    task_row=row,
+                    reason="Lease expired, max retries exceeded",
+                    escalation_class="policy",
+                )
+
+        await session.commit()
+
+    return {"expired": len(expired_rows)}
+
+
 # =============================================================================
 # Helper Functions
 # =============================================================================

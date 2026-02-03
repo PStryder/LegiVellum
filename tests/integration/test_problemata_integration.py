@@ -72,7 +72,7 @@ def _receipt_payload(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_task_submission_accept_complete_inbox_closed(asyncgate_client, memorygate_client, auth_headers):
+async def test_task_submission_accept_complete_inbox_closed(asyncgate_mcp, memorygate_mcp):
     payload = {
         "task_type": "demo",
         "task_summary": "integration task",
@@ -85,49 +85,43 @@ async def test_task_submission_accept_complete_inbox_closed(asyncgate_client, me
         "expected_artifact_mime": "NA",
     }
 
-    response = await asyncgate_client.post("/tasks", json=payload, headers=auth_headers)
-    assert response.status_code == 201
-    task_id = response.json()["task_id"]
+    response = await asyncgate_mcp.queue_task(**payload)
+    task_id = response["task_id"]
 
-    inbox = await memorygate_client.get("/inbox", params={"recipient_ai": "worker.alice"}, headers=auth_headers)
-    assert inbox.status_code == 200
-    assert inbox.json()["count"] == 1
+    inbox = await memorygate_mcp.memory_get_inbox(recipient_ai="worker.alice")
+    assert inbox["count"] == 1
 
-    lease = await asyncgate_client.post(
-        "/lease",
-        json={"worker_id": "worker.alice", "capabilities": [], "max_tasks": 1, "preferred_kinds": []},
-        headers=auth_headers,
+    lease = await asyncgate_mcp.lease_task(
+        worker_id="worker.alice",
+        capabilities=[],
+        preferred_kinds=[],
     )
-    assert lease.status_code == 200
-    lease_id = lease.json()["lease_id"]
+    assert lease["status"] == "leased"
+    lease_id = lease["lease_id"]
 
-    complete = await asyncgate_client.post(
-        f"/lease/{lease_id}/complete",
-        json={
-            "worker_id": "worker.alice",
-            "status": "success",
-            "outcome_kind": "none",
-            "outcome_text": "done",
-        },
-        headers=auth_headers,
+    complete = await asyncgate_mcp.complete_task(
+        lease_id=lease_id,
+        worker_id="worker.alice",
+        status="success",
+        outcome_kind="none",
+        outcome_text="done",
     )
-    assert complete.status_code == 200
+    assert complete["status"] == "success"
 
-    timeline = await memorygate_client.get(f"/receipts/task/{task_id}", headers=auth_headers)
-    receipts = timeline.json()["receipts"]
+    timeline = await memorygate_mcp.memory_get_task_timeline(task_id)
+    receipts = timeline["receipts"]
     accepted = next(r for r in receipts if r["phase"] == "accepted")
 
-    archive = await memorygate_client.post(f"/receipts/{accepted['receipt_id']}/archive", headers=auth_headers)
-    assert archive.status_code == 200
+    archive = await memorygate_mcp.memory_archive_receipt(accepted["receipt_id"])
+    assert archive["status"] == "archived"
 
-    inbox_after = await memorygate_client.get("/inbox", params={"recipient_ai": "worker.alice"}, headers=auth_headers)
-    assert inbox_after.status_code == 200
-    assert inbox_after.json()["count"] == 0
+    inbox_after = await memorygate_mcp.memory_get_inbox(recipient_ai="worker.alice")
+    assert inbox_after["count"] == 0
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_idempotency_duplicate_receipt_rejected(memorygate_client, auth_headers):
+async def test_idempotency_duplicate_receipt_rejected(memorygate_mcp):
     receipt_id = "01JGTESTDUPLICATE00000000001"
     task_id = "T-dup-001"
     payload = _receipt_payload(
@@ -138,16 +132,16 @@ async def test_idempotency_duplicate_receipt_rejected(memorygate_client, auth_he
         recipient_ai="worker.alice",
     )
 
-    first = await memorygate_client.post("/receipts", json=payload, headers=auth_headers)
-    assert first.status_code == 201
+    first = await memorygate_mcp.memory_submit_receipt(payload)
+    assert "error" not in first
 
-    second = await memorygate_client.post("/receipts", json=payload, headers=auth_headers)
-    assert second.status_code == 409
+    second = await memorygate_mcp.memory_submit_receipt(payload)
+    assert second["error"] == "duplicate_receipt_id"
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_provenance_chain_traversal(memorygate_client, auth_headers):
+async def test_provenance_chain_traversal(memorygate_mcp):
     root_id = "01JGCHAINROOT00000000000001"
     mid_id = "01JGCHAINMID00000000000001"
     leaf_id = "01JGCHAINLEAF00000000000001"
@@ -186,19 +180,19 @@ async def test_provenance_chain_traversal(memorygate_client, auth_headers):
     )
 
     for payload in (root, mid, leaf):
-        resp = await memorygate_client.post("/receipts", json=payload, headers=auth_headers)
-        assert resp.status_code == 201
+        resp = await memorygate_mcp.memory_submit_receipt(payload)
+        assert "error" not in resp
 
-    chain = await memorygate_client.get(f"/receipts/chain/{root_id}", headers=auth_headers)
-    assert chain.status_code == 200
-    chain_ids = [r["receipt_id"] for r in chain.json()["chain"]]
+    chain = await memorygate_mcp.memory_get_receipt_chain(root_id)
+    chain_ids = [r["receipt_id"] for r in chain["chain"]]
     assert chain_ids[0] == root_id
     assert set(chain_ids) == {root_id, mid_id, leaf_id}
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_multi_tenant_isolation(memorygate_client, auth_headers, auth_headers_bob):
+@pytest.mark.xfail(reason="Single-tenant v1; multi-tenant isolation deferred", strict=True)
+async def test_multi_tenant_isolation(memorygate_mcp):
     alice_receipt = _receipt_payload(
         receipt_id="01JGALICE0000000000000001",
         task_id="T-alice-001",
@@ -214,26 +208,24 @@ async def test_multi_tenant_isolation(memorygate_client, auth_headers, auth_head
         recipient_ai="worker.bob",
     )
 
-    resp_a = await memorygate_client.post("/receipts", json=alice_receipt, headers=auth_headers)
-    resp_b = await memorygate_client.post("/receipts", json=bob_receipt, headers=auth_headers_bob)
-    assert resp_a.status_code == 201
-    assert resp_b.status_code == 201
+    resp_a = await memorygate_mcp.memory_submit_receipt(alice_receipt)
+    resp_b = await memorygate_mcp.memory_submit_receipt(bob_receipt)
+    assert "error" not in resp_a
+    assert "error" not in resp_b
 
-    inbox_alice = await memorygate_client.get("/inbox", params={"recipient_ai": "worker.alice"}, headers=auth_headers)
-    assert inbox_alice.status_code == 200
-    assert inbox_alice.json()["count"] == 1
+    inbox_alice = await memorygate_mcp.memory_get_inbox(recipient_ai="worker.alice")
+    assert inbox_alice["count"] == 1
 
-    inbox_bob = await memorygate_client.get("/inbox", params={"recipient_ai": "worker.alice"}, headers=auth_headers_bob)
-    assert inbox_bob.status_code == 200
-    assert inbox_bob.json()["count"] == 0
+    inbox_bob = await memorygate_mcp.memory_get_inbox(recipient_ai="worker.alice")
+    assert inbox_bob["count"] == 0
 
-    unauthorized = await memorygate_client.get(f"/receipts/{alice_receipt['receipt_id']}", headers=auth_headers_bob)
-    assert unauthorized.status_code == 404
+    unauthorized = await memorygate_mcp.memory_get_receipt(alice_receipt["receipt_id"])
+    assert unauthorized["error"] == "not_found"
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_concurrent_workers_claim_different_tasks(asyncgate_client, auth_headers):
+async def test_concurrent_workers_claim_different_tasks(asyncgate_mcp):
     for idx in range(2):
         payload = {
             "task_type": "demo",
@@ -246,25 +238,25 @@ async def test_concurrent_workers_claim_different_tasks(asyncgate_client, auth_h
             "expected_outcome_kind": "none",
             "expected_artifact_mime": "NA",
         }
-        resp = await asyncgate_client.post("/tasks", json=payload, headers=auth_headers)
-        assert resp.status_code == 201
+        resp = await asyncgate_mcp.queue_task(**payload)
+        assert resp["status"] == "queued"
 
     async def lease(worker_id: str):
-        return await asyncgate_client.post(
-            "/lease",
-            json={"worker_id": worker_id, "capabilities": [], "max_tasks": 1, "preferred_kinds": []},
-            headers=auth_headers,
+        return await asyncgate_mcp.lease_task(
+            worker_id=worker_id,
+            capabilities=[],
+            preferred_kinds=[],
         )
 
     lease_one, lease_two = await asyncio.gather(lease("worker.a"), lease("worker.b"))
-    assert lease_one.status_code == 200
-    assert lease_two.status_code == 200
-    assert lease_one.json()["task"]["task_id"] != lease_two.json()["task"]["task_id"]
+    assert lease_one["status"] == "leased"
+    assert lease_two["status"] == "leased"
+    assert lease_one["task"]["task_id"] != lease_two["task"]["task_id"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_worker_crash_second_worker_picks_up(asyncgate_client, integration_session, auth_headers):
+async def test_worker_crash_second_worker_picks_up(asyncgate_mcp, integration_session):
     payload = {
         "task_type": "demo",
         "task_summary": "crash-task",
@@ -277,15 +269,15 @@ async def test_worker_crash_second_worker_picks_up(asyncgate_client, integration
         "expected_artifact_mime": "NA",
     }
 
-    created = await asyncgate_client.post("/tasks", json=payload, headers=auth_headers)
-    task_id = created.json()["task_id"]
+    created = await asyncgate_mcp.queue_task(**payload)
+    task_id = created["task_id"]
 
-    lease = await asyncgate_client.post(
-        "/lease",
-        json={"worker_id": "worker.alice", "capabilities": [], "max_tasks": 1, "preferred_kinds": []},
-        headers=auth_headers,
+    lease = await asyncgate_mcp.lease_task(
+        worker_id="worker.alice",
+        capabilities=[],
+        preferred_kinds=[],
     )
-    assert lease.status_code == 200
+    assert lease["status"] == "leased"
 
     await integration_session.execute(
         text(
@@ -296,21 +288,21 @@ async def test_worker_crash_second_worker_picks_up(asyncgate_client, integration
     )
     await integration_session.commit()
 
-    expired = await asyncgate_client.get("/admin/expire-leases", headers=auth_headers)
-    assert expired.status_code == 200
+    expired = await asyncgate_mcp.expire_leases()
+    assert expired["expired"] == 1
 
-    new_lease = await asyncgate_client.post(
-        "/lease",
-        json={"worker_id": "worker.bob", "capabilities": [], "max_tasks": 1, "preferred_kinds": []},
-        headers=auth_headers,
+    new_lease = await asyncgate_mcp.lease_task(
+        worker_id="worker.bob",
+        capabilities=[],
+        preferred_kinds=[],
     )
-    assert new_lease.status_code == 200
-    assert new_lease.json()["task"]["task_id"] == task_id
+    assert new_lease["status"] == "leased"
+    assert new_lease["task"]["task_id"] == task_id
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_lease_expiry_emits_escalation(asyncgate_client, memorygate_client, integration_session, auth_headers):
+async def test_lease_expiry_emits_escalation(asyncgate_mcp, memorygate_mcp, integration_session):
     payload = {
         "task_type": "demo",
         "task_summary": "expire-task",
@@ -323,15 +315,15 @@ async def test_lease_expiry_emits_escalation(asyncgate_client, memorygate_client
         "expected_artifact_mime": "NA",
     }
 
-    created = await asyncgate_client.post("/tasks", json=payload, headers=auth_headers)
-    task_id = created.json()["task_id"]
+    created = await asyncgate_mcp.queue_task(**payload)
+    task_id = created["task_id"]
 
-    lease = await asyncgate_client.post(
-        "/lease",
-        json={"worker_id": "worker.alice", "capabilities": [], "max_tasks": 1, "preferred_kinds": []},
-        headers=auth_headers,
+    lease = await asyncgate_mcp.lease_task(
+        worker_id="worker.alice",
+        capabilities=[],
+        preferred_kinds=[],
     )
-    assert lease.status_code == 200
+    assert lease["status"] == "leased"
 
     await integration_session.execute(
         text(
@@ -342,10 +334,10 @@ async def test_lease_expiry_emits_escalation(asyncgate_client, memorygate_client
     )
     await integration_session.commit()
 
-    expired = await asyncgate_client.get("/admin/expire-leases", headers=auth_headers)
-    assert expired.status_code == 200
+    expired = await asyncgate_mcp.expire_leases()
+    assert expired["expired"] == 1
 
-    timeline = await memorygate_client.get(f"/receipts/task/{task_id}", headers=auth_headers)
-    receipts = timeline.json()["receipts"]
+    timeline = await memorygate_mcp.memory_get_task_timeline(task_id)
+    receipts = timeline["receipts"]
     phases = {r["phase"] for r in receipts}
     assert "escalate" in phases

@@ -131,6 +131,16 @@ async def memory_store_receipt(
     parent_task_id: str = "NA",
     completed_at: str = None,
     metadata: dict = None,
+    receipt_id: str | None = None,
+    dedupe_key: str = "NA",
+    attempt: int = 0,
+    expected_outcome_kind: str = "NA",
+    expected_artifact_mime: str = "NA",
+    artifact_checksum: str = "NA",
+    artifact_size_bytes: int = 0,
+    retry_requested: bool = False,
+    created_at: str | None = None,
+    started_at: str | None = None,
 ) -> dict[str, Any]:
     """
     Store a receipt in MemoryGate.
@@ -172,6 +182,7 @@ async def memory_store_receipt(
 
     # Build receipt create object
     receipt_data = ReceiptCreate(
+        receipt_id=receipt_id,
         task_id=task_id,
         phase=Phase(phase),
         task_type=task_type,
@@ -193,6 +204,15 @@ async def memory_store_receipt(
         escalation_to=escalation_to,
         caused_by_receipt_id=caused_by_receipt_id,
         parent_task_id=parent_task_id,
+        dedupe_key=dedupe_key,
+        attempt=attempt,
+        expected_outcome_kind=expected_outcome_kind,
+        expected_artifact_mime=expected_artifact_mime,
+        artifact_checksum=artifact_checksum,
+        artifact_size_bytes=artifact_size_bytes,
+        retry_requested=retry_requested,
+        created_at=datetime.fromisoformat(created_at) if created_at else None,
+        started_at=datetime.fromisoformat(started_at) if started_at else None,
         completed_at=datetime.fromisoformat(completed_at) if completed_at else None,
         metadata=metadata or {},
     )
@@ -235,12 +255,87 @@ async def memory_store_receipt(
         receipt_dict["stored_at"] = stored_at
         receipt_dict["inputs"] = json.dumps(receipt_dict["inputs"])
         receipt_dict["metadata"] = json.dumps(receipt_dict["metadata"])
+        receipt_dict.pop("body", None)
+        receipt_dict.pop("artifact_refs", None)
 
-        await session.execute(insert_sql, receipt_dict)
-        await session.commit()
+        try:
+            await session.execute(insert_sql, receipt_dict)
+            await session.commit()
+        except Exception as exc:
+            if "unique_receipt_per_tenant" in str(exc) or "duplicate key" in str(exc).lower():
+                return {"error": "duplicate_receipt_id", "receipt_id": receipt.receipt_id}
+            return {"error": "database_error", "message": str(exc)}
 
     return {
         "receipt_id": receipt.receipt_id,
+        "stored_at": stored_at.isoformat(),
+        "tenant_id": tenant_id,
+    }
+
+
+@mcp.tool()
+async def memory_submit_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    """
+    Store a full receipt payload.
+
+    Accepts a ReceiptCreate-shaped payload and returns the stored receipt ID.
+    """
+    tenant_id = DEFAULT_TENANT
+
+    try:
+        receipt_create = ReceiptCreate(**receipt)
+        receipt_obj = validate_receipt_create(receipt_create, tenant_id)
+    except (ValidationError, ValueError) as exc:
+        return {"error": "validation_failed", "message": str(exc)}
+    except Exception as exc:  # Pydantic validation errors
+        return {"error": "validation_failed", "message": str(exc)}
+
+    stored_at = datetime.utcnow()
+
+    async with get_session() as session:
+        insert_sql = text("""
+            INSERT INTO receipts (
+                schema_version, tenant_id, receipt_id, task_id, parent_task_id,
+                caused_by_receipt_id, dedupe_key, attempt, from_principal,
+                for_principal, source_system, recipient_ai, trust_domain,
+                phase, status, realtime, task_type, task_summary, task_body,
+                inputs, expected_outcome_kind, expected_artifact_mime,
+                outcome_kind, outcome_text, artifact_location, artifact_pointer,
+                artifact_checksum, artifact_size_bytes, artifact_mime,
+                escalation_class, escalation_reason, escalation_to, retry_requested,
+                created_at, stored_at, started_at, completed_at, read_at, archived_at,
+                metadata
+            ) VALUES (
+                :schema_version, :tenant_id, :receipt_id, :task_id, :parent_task_id,
+                :caused_by_receipt_id, :dedupe_key, :attempt, :from_principal,
+                :for_principal, :source_system, :recipient_ai, :trust_domain,
+                :phase, :status, :realtime, :task_type, :task_summary, :task_body,
+                :inputs, :expected_outcome_kind, :expected_artifact_mime,
+                :outcome_kind, :outcome_text, :artifact_location, :artifact_pointer,
+                :artifact_checksum, :artifact_size_bytes, :artifact_mime,
+                :escalation_class, :escalation_reason, :escalation_to, :retry_requested,
+                :created_at, :stored_at, :started_at, :completed_at, :read_at, :archived_at,
+                :metadata
+            )
+        """)
+
+        receipt_dict = receipt_obj.model_dump()
+        receipt_dict["stored_at"] = stored_at
+        receipt_dict["inputs"] = json.dumps(receipt_dict["inputs"])
+        receipt_dict["metadata"] = json.dumps(receipt_dict["metadata"])
+        receipt_dict.pop("body", None)
+        receipt_dict.pop("artifact_refs", None)
+
+        try:
+            await session.execute(insert_sql, receipt_dict)
+            await session.commit()
+        except Exception as exc:
+            if "unique_receipt_per_tenant" in str(exc) or "duplicate key" in str(exc).lower():
+                return {"error": "duplicate_receipt_id", "receipt_id": receipt_obj.receipt_id}
+            return {"error": "database_error", "message": str(exc)}
+
+    return {
+        "receipt_id": receipt_obj.receipt_id,
         "stored_at": stored_at.isoformat(),
         "tenant_id": tenant_id,
     }
@@ -358,6 +453,40 @@ async def memory_get_task_timeline(task_id: str) -> dict[str, Any]:
         "tenant_id": tenant_id,
         "task_id": task_id,
         "receipts": [_row_to_dict(row) for row in rows],
+    }
+
+
+@mcp.tool()
+async def memory_get_receipt_chain(receipt_id: str) -> dict[str, Any]:
+    """
+    Get the receipt causality chain starting at a receipt ID.
+    """
+    tenant_id = DEFAULT_TENANT
+
+    async with get_session() as session:
+        query = text("""
+            WITH RECURSIVE chain AS (
+                SELECT * FROM receipts
+                WHERE tenant_id = :tenant_id AND receipt_id = :receipt_id
+
+                UNION ALL
+
+                SELECT r.* FROM receipts r
+                JOIN chain c ON r.caused_by_receipt_id = c.receipt_id
+                WHERE r.tenant_id = :tenant_id
+            )
+            SELECT * FROM chain ORDER BY stored_at
+        """)
+
+        result = await session.execute(query, {
+            "tenant_id": tenant_id,
+            "receipt_id": receipt_id,
+        })
+        rows = result.mappings().all()
+
+    return {
+        "root_receipt_id": receipt_id,
+        "chain": [_row_to_dict(row) for row in rows],
     }
 
 

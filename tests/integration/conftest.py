@@ -6,7 +6,6 @@ from importlib.util import module_from_spec, spec_from_file_location
 
 import pytest
 import pytest_asyncio
-import httpx
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
 
@@ -52,6 +51,12 @@ def _set_integration_env():
     os.environ.setdefault("ENABLE_METRICS", "false")
     os.environ.setdefault("MEMORYGATE_URL", "http://memorygate.test")
     os.environ.setdefault("ASYNCGATE_URL", "http://asyncgate.test")
+    os.environ.setdefault("LEGIVELLUM_TENANT_ID", "alice")
+
+    root = _repo_root()
+    shared_path = root / "shared"
+    if str(shared_path) not in sys.path:
+        sys.path.insert(0, str(shared_path))
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -72,8 +77,12 @@ async def integration_engine():
         await engine.dispose()
         pytest.skip(f"Integration database unavailable: {exc}")
 
+    from legivellum.database import init_database, close_database
+    init_database(TEST_DATABASE_URL)
+
     yield engine
 
+    await close_database()
     await engine.dispose()
 
 
@@ -119,66 +128,205 @@ def tenant_id():
 
 
 @pytest.fixture(scope="session")
-def memorygate_app():
+def memorygate_mcp():
     root = _repo_root()
     module = _load_module(
-        "memorygate_main",
-        root / "components" / "memorygate" / "src" / "main.py",
+        "memorygate_mcp",
+        root / "components" / "memorygate" / "src" / "mcp_server.py",
         root / "components" / "memorygate" / "src",
     )
-    return module.app
+    return module
 
 
 @pytest.fixture(scope="session")
-def asyncgate_app(memorygate_app):
+def asyncgate_mcp(memorygate_mcp):
     root = _repo_root()
     asyncgate_src = root / "components" / "asyncgate" / "src"
     module = _load_module(
-        "asyncgate_main",
-        asyncgate_src / "main.py",
+        "asyncgate_mcp",
+        asyncgate_src / "mcp_server.py",
         asyncgate_src,
     )
-
-    import receipt_emitter
-
-    async def _noop_worker(*args, **kwargs):
-        return None
-
-    async def _emit_receipt_with_retry(memorygate_url, tenant_id, receipt_data, max_retries=3, timeout=10.0):
-        receipt_id = receipt_data["receipt_id"]
-        transport = httpx.ASGITransport(app=memorygate_app)
-        async with httpx.AsyncClient(transport=transport, base_url=memorygate_url) as client:
-            response = await client.post(
-                "/receipts",
-                json=receipt_data,
-                headers={"X-API-Key": f"dev-key-{tenant_id}"},
-                timeout=timeout,
-            )
-        if response.status_code == 409:
-            return receipt_id
-        response.raise_for_status()
-        return receipt_id
-
-    module.lease_expiry_worker = _noop_worker
-    module.emit_receipt_with_retry = _emit_receipt_with_retry
-    receipt_emitter.retry_worker = _noop_worker
-    receipt_emitter.stop_retry_worker = lambda: None
-    receipt_emitter.emit_receipt_with_retry = _emit_receipt_with_retry
-
-    return module.app
+    return module
 
 
-@pytest_asyncio.fixture(scope="session")
-async def memorygate_client(memorygate_app, integration_engine):
-    async with memorygate_app.router.lifespan_context(memorygate_app):
-        transport = httpx.ASGITransport(app=memorygate_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://memorygate.test") as client:
-            yield client
+@pytest.fixture(autouse=True)
+def _patch_asyncgate_receipts(asyncgate_mcp, memorygate_mcp, monkeypatch):
+    async def _submit(receipt_data: dict):
+        result = await memorygate_mcp.memory_submit_receipt(receipt_data)
+        if "error" in result and result["error"] != "duplicate_receipt_id":
+            raise RuntimeError(result)
+        return result["receipt_id"]
 
+    async def _emit_receipt(
+        tenant_id: str,
+        task_id: str,
+        phase: str,
+        task_type: str,
+        task_summary: str,
+        task_body: str,
+        inputs: dict,
+        recipient_ai: str,
+        from_principal: str,
+        for_principal: str,
+        expected_outcome_kind: str,
+        expected_artifact_mime: str,
+        caused_by_receipt_id: str | None,
+        parent_task_id: str | None,
+        created_at,
+    ) -> str:
+        import ulid
 
-@pytest_asyncio.fixture(scope="session")
-async def asyncgate_client(asyncgate_app, integration_engine):
-    async with asyncgate_app.router.lifespan_context(asyncgate_app):
-        transport = httpx.ASGITransport(app=asyncgate_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://asyncgate.test") as client:
-            yield client
+        receipt_id = str(ulid.new())
+        receipt_data = {
+            "schema_version": "1.0",
+            "receipt_id": receipt_id,
+            "task_id": task_id,
+            "parent_task_id": parent_task_id or "NA",
+            "caused_by_receipt_id": caused_by_receipt_id or "NA",
+            "dedupe_key": "NA",
+            "attempt": 0,
+            "from_principal": from_principal,
+            "for_principal": for_principal,
+            "source_system": "asyncgate",
+            "recipient_ai": recipient_ai,
+            "trust_domain": "default",
+            "phase": phase,
+            "status": "NA",
+            "realtime": False,
+            "task_type": task_type,
+            "task_summary": task_summary,
+            "task_body": task_body,
+            "inputs": inputs,
+            "expected_outcome_kind": expected_outcome_kind,
+            "expected_artifact_mime": expected_artifact_mime,
+            "outcome_kind": "NA",
+            "outcome_text": "NA",
+            "artifact_location": "NA",
+            "artifact_pointer": "NA",
+            "artifact_checksum": "NA",
+            "artifact_size_bytes": 0,
+            "artifact_mime": "NA",
+            "escalation_class": "NA",
+            "escalation_reason": "NA",
+            "escalation_to": "NA",
+            "retry_requested": False,
+            "created_at": created_at.isoformat(),
+            "metadata": {},
+        }
+        return await _submit(receipt_data)
+
+    async def _emit_complete_receipt(
+        tenant_id: str,
+        task_row: dict,
+        status: str,
+        outcome_kind: str,
+        outcome_text: str,
+        artifact_pointer: str | None,
+        artifact_location: str | None,
+        artifact_mime: str | None,
+        artifact_checksum: str | None,
+        artifact_size_bytes: int,
+        completed_at,
+    ) -> str:
+        import ulid
+        import json
+
+        receipt_id = str(ulid.new())
+        inputs = task_row["inputs"]
+        if isinstance(inputs, str):
+            inputs = json.loads(inputs)
+
+        receipt_data = {
+            "schema_version": "1.0",
+            "receipt_id": receipt_id,
+            "task_id": task_row["task_id"],
+            "parent_task_id": task_row["parent_task_id"],
+            "caused_by_receipt_id": task_row["caused_by_receipt_id"],
+            "dedupe_key": "NA",
+            "attempt": task_row["attempt"],
+            "from_principal": task_row["from_principal"],
+            "for_principal": task_row["for_principal"],
+            "source_system": "asyncgate",
+            "recipient_ai": task_row["recipient_ai"],
+            "trust_domain": "default",
+            "phase": "complete",
+            "status": status,
+            "realtime": False,
+            "task_type": task_row["task_type"],
+            "task_summary": task_row["task_summary"],
+            "task_body": task_row["task_body"],
+            "inputs": inputs,
+            "expected_outcome_kind": task_row["expected_outcome_kind"],
+            "expected_artifact_mime": task_row["expected_artifact_mime"],
+            "outcome_kind": outcome_kind,
+            "outcome_text": outcome_text,
+            "artifact_location": artifact_location or "NA",
+            "artifact_pointer": artifact_pointer or "NA",
+            "artifact_checksum": artifact_checksum or "NA",
+            "artifact_size_bytes": artifact_size_bytes,
+            "artifact_mime": artifact_mime or "NA",
+            "escalation_class": "NA",
+            "escalation_reason": "NA",
+            "escalation_to": "NA",
+            "retry_requested": False,
+            "completed_at": completed_at.isoformat(),
+            "metadata": {},
+        }
+        return await _submit(receipt_data)
+
+    async def _emit_escalate_receipt(
+        tenant_id: str,
+        task_row: dict,
+        reason: str,
+        escalation_class: str,
+    ) -> str:
+        import ulid
+        import json
+
+        receipt_id = str(ulid.new())
+        inputs = task_row["inputs"]
+        if isinstance(inputs, str):
+            inputs = json.loads(inputs)
+
+        escalation_to = "delegate"
+        receipt_data = {
+            "schema_version": "1.0",
+            "receipt_id": receipt_id,
+            "task_id": task_row["task_id"],
+            "parent_task_id": task_row["parent_task_id"],
+            "caused_by_receipt_id": task_row["caused_by_receipt_id"],
+            "dedupe_key": "NA",
+            "attempt": task_row["attempt"],
+            "from_principal": task_row["from_principal"],
+            "for_principal": task_row["for_principal"],
+            "source_system": "asyncgate",
+            "recipient_ai": escalation_to,
+            "trust_domain": "default",
+            "phase": "escalate",
+            "status": "NA",
+            "realtime": False,
+            "task_type": task_row["task_type"],
+            "task_summary": task_row["task_summary"],
+            "task_body": task_row["task_body"],
+            "inputs": inputs,
+            "expected_outcome_kind": task_row["expected_outcome_kind"],
+            "expected_artifact_mime": task_row["expected_artifact_mime"],
+            "outcome_kind": "NA",
+            "outcome_text": "NA",
+            "artifact_location": "NA",
+            "artifact_pointer": "NA",
+            "artifact_checksum": "NA",
+            "artifact_size_bytes": 0,
+            "artifact_mime": "NA",
+            "escalation_class": escalation_class,
+            "escalation_reason": reason,
+            "escalation_to": escalation_to,
+            "retry_requested": False,
+            "metadata": {},
+        }
+        return await _submit(receipt_data)
+
+    monkeypatch.setattr(asyncgate_mcp, "_emit_receipt", _emit_receipt)
+    monkeypatch.setattr(asyncgate_mcp, "_emit_complete_receipt", _emit_complete_receipt)
+    monkeypatch.setattr(asyncgate_mcp, "_emit_escalate_receipt", _emit_escalate_receipt)
