@@ -1,35 +1,13 @@
 {
   "mcpServers": {
     "memorygate": {
-      "command": "python",
-      "args": ["components/memorygate/src/mcp_server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/legivellum",
-        "LEGIVELLUM_TENANT_ID": "pstryder",
-        "MEMORYGATE_URL": "http://localhost:8001",
-        "ASYNCGATE_URL": "http://localhost:8002",
-        "DELEGATE_URL": "http://localhost:8003"
-      }
+      "url": "http://localhost:8001/mcp"
     },
     "asyncgate": {
-      "command": "python",
-      "args": ["components/asyncgate/src/mcp_server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/legivellum",
-        "LEGIVELLUM_TENANT_ID": "pstryder",
-        "MEMORYGATE_URL": "http://localhost:8001",
-        "LEASE_DURATION_SECONDS": "900"
-      }
+      "url": "http://localhost:8002/mcp"
     },
     "delegate": {
-      "command": "python",
-      "args": ["components/delegate/src/mcp_server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/legivellum",
-        "LEGIVELLUM_TENANT_ID": "pstryder",
-        "MEMORYGATE_URL": "http://localhost:8001",
-        "ASYNCGATE_URL": "http://localhost:8002"
-      }
+      "url": "http://localhost:8003/mcp"
     }
   }
 }
