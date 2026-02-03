@@ -133,8 +133,8 @@ InterroGate emits exactly one receipt per decision:
 ## Running
 
 ```bash
-# Start server
-uvicorn interrogate.api:app --host 0.0.0.0 --port 8000
+# Start server (MCP HTTP)
+uvicorn interrogate.mcp:app --host 0.0.0.0 --port 8000
 
 # Or use the entry point
 python -m interrogate.main
