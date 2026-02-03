@@ -226,13 +226,4 @@ If something cannot be recorded as a receipt:
 
 Break this rule, and the system will punish you—not immediately, but *inevitably*.
 
----
 
-If you want, next step I can:
-
-* tighten this into a formal RFC-style spec
-* add a short “failure modes” appendix (“If you see this symptom, you broke this rule”)
-* or write a parallel **“anti-patterns” page** that shows exactly how people will fuck this up
-
-But this page?
-This is the spine.
