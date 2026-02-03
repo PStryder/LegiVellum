@@ -254,7 +254,7 @@ fly deploy
 ## Monitoring and Observability
 
 - Set `ENABLE_METRICS=true` to expose Prometheus metrics (where supported).
-- Use `/health` and `/ready` for liveness/readiness checks (REST mode).
+- Use MCP health tools (for example, `*_health` via `/mcp` JSON-RPC) for liveness/readiness checks.
 - Centralize logs and include correlation keys (task_id, receipt_id, lease_id).
 
 ## Backup and Recovery

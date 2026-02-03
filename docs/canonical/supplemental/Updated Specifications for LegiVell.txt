@@ -91,7 +91,7 @@ Hold tasks until claimed. AsyncGate stores tasks in a durable queue until a work
 
 Provide leases and completions. Workers call POST /lease to claim a task. This returns a lease_id and an expiry. Workers complete a task via POST /complete (with a lease_id), which archives the task and emits a complete receipt to ReceiptGate.
 
-Support introspection. AsyncGate exposes read‑only introspection endpoints (InterView) such as GET /health and GET /queue/depth for monitoring. These never mutate state or emit receipts.
+Support introspection. AsyncGate exposes read‑only introspection tools (InterView) such as asyncgate.health and asyncgate.queue_depth for monitoring (via MCP). These never mutate state or emit receipts.
 
 What AsyncGate Does Not Do
 
@@ -155,6 +155,6 @@ MetaGate: Also not a standalone repo in this set, MetaGate manages bootstrap, to
 
 DepotGate: Handles artifact storage and lifecycle. Plans, task inputs and outputs are stored in DepotGate and referenced by receipts. AsyncGate and DeleGate only ever store pointers to DepotGate artifacts.
 
-InterView: A class of read‑only endpoints across all primitives. Introspection APIs (e.g., GET /health) are part of InterView. They never mutate state or emit receipts.
+InterView: A class of read‑only tools across all primitives. Introspection APIs (e.g., *.health) are part of InterView and are exposed via MCP. They never mutate state or emit receipts.
 
 By following this unified specification, each codebase can evolve independently while remaining coherent with the LegiVellum system as a whole. When updating or extending any primitive, first consult this document to ensure that new features respect the boundaries and invariants described above.

@@ -68,13 +68,26 @@ class HttpClient:
 
 class AsyncGateClient:
     def __init__(self, base_url: str, api_key: str | None = None, tenant_id: str | None = None) -> None:
-        headers = {}
-        if tenant_id:
-            headers["X-Tenant-ID"] = tenant_id
-        self._http = HttpClient(base_url, api_key=api_key, headers=headers)
+        self._tenant_id = tenant_id or "00000000-0000-0000-0000-000000000000"
+        self._http = HttpClient(base_url, api_key=api_key)
+
+    def _mcp_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments},
+        }
+        response = self._http.request_json("POST", "/mcp", payload)
+        if "error" in response:
+            raise RuntimeError(f"AsyncGate MCP error: {response['error']}")
+        result = response.get("result")
+        if result is None:
+            raise RuntimeError(f"AsyncGate MCP returned no result: {response}")
+        return result
 
     def health(self) -> dict[str, Any]:
-        return self._http.request_json("GET", "/v1/health")
+        return self._mcp_call("asyncgate.health", {})
 
     def create_task(
         self,
@@ -95,13 +108,10 @@ class AsyncGateClient:
             "principal_ai": principal_ai or principal_id,
             "expected_outcome_kind": expected_outcome_kind,
             "expected_artifact_mime": expected_artifact_mime,
+            "agent_id": principal_id,
+            "tenant_id": self._tenant_id,
         }
-        return self._http.request_json(
-            "POST",
-            "/v1/tasks",
-            body,
-            query={"principal_kind": principal_kind, "principal_id": principal_id},
-        )
+        return self._mcp_call("asyncgate.create_task", body)
 
     def claim_lease(
         self,
@@ -118,12 +128,19 @@ class AsyncGateClient:
             "accept_types": accept_types,
             "max_tasks": max_tasks,
             "lease_ttl_seconds": lease_ttl_seconds,
+            "tenant_id": self._tenant_id,
         }
-        return self._http.request_json("POST", "/v1/leases/claim", body)
+        return self._mcp_call("asyncgate.lease_next", body)
 
     def start_task(self, *, task_id: str, worker_id: str, lease_id: str) -> dict[str, Any]:
-        body = {"worker_id": worker_id, "lease_id": lease_id}
-        return self._http.request_json("POST", f"/v1/tasks/{task_id}/running", body)
+        body = {
+            "worker_id": worker_id,
+            "task_id": task_id,
+            "lease_id": lease_id,
+            "progress": {"state": "running"},
+            "tenant_id": self._tenant_id,
+        }
+        return self._mcp_call("asyncgate.report_progress", body)
 
     def complete_task(
         self,
@@ -136,14 +153,16 @@ class AsyncGateClient:
     ) -> dict[str, Any]:
         body = {
             "worker_id": worker_id,
+            "task_id": task_id,
             "lease_id": lease_id,
             "result": result,
             "artifacts": artifacts,
+            "tenant_id": self._tenant_id,
         }
-        return self._http.request_json("POST", f"/v1/tasks/{task_id}/complete", body)
+        return self._mcp_call("asyncgate.complete", body)
 
     def get_task(self, task_id: str) -> dict[str, Any]:
-        return self._http.request_json("GET", f"/v1/tasks/{task_id}")
+        return self._mcp_call("asyncgate.get_task", {"task_id": task_id, "tenant_id": self._tenant_id})
 
 
 class DepotGateClient:
@@ -151,7 +170,22 @@ class DepotGateClient:
         self._http = HttpClient(base_url, api_key=api_key)
 
     def health(self) -> dict[str, Any]:
-        return self._http.request_json("GET", "/health")
+        return self._mcp_call("depotgate.health", {})
+
+    def _mcp_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments},
+        }
+        response = self._http.request_json("POST", "/mcp", payload)
+        if "error" in response:
+            raise RuntimeError(f"DepotGate MCP error: {response['error']}")
+        result = response.get("result")
+        if result is None:
+            raise RuntimeError(f"DepotGate MCP returned no result: {response}")
+        return result
 
     def stage_artifact(
         self,
@@ -176,13 +210,7 @@ class DepotGateClient:
                 },
             },
         }
-        response = self._http.request_json("POST", "/mcp", payload)
-        if "error" in response:
-            raise RuntimeError(f"DepotGate MCP error: {response['error']}")
-        result = response.get("result")
-        if result is None:
-            raise RuntimeError(f"DepotGate MCP returned no result: {response}")
-        return result
+        return self._mcp_call("stage_artifact", payload["params"]["arguments"])
 
 
 class ReceiptGateClient:
@@ -190,7 +218,7 @@ class ReceiptGateClient:
         self._http = HttpClient(base_url, api_key=api_key)
 
     def health(self) -> dict[str, Any]:
-        return self._http.request_json("GET", "/health")
+        return self._mcp_call("receiptgate.health", {})
 
     def _mcp_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         payload = {

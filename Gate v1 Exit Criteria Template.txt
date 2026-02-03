@@ -16,7 +16,7 @@ A Gate is “v1-ready” when it is standalone deployable, contract-stable, and 
 
  Cold start succeeds (no import errors, no missing env)
 
- Health endpoint returns OK (/health or equivalent)
+ Health tool returns OK via MCP (e.g., gate.health)
 
  Config is documented (env vars + defaults)
 

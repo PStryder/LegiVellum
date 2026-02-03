@@ -24,10 +24,10 @@ async def main() -> None:
     manifest_key = _env("PROBLEMATA_MANIFEST_KEY", "problemata-demo-manifest")
 
     services = {
-        "metagate": {"url": _env("METAGATE_URL", "http://metagate:8000"), "auth": "api_key"},
-        "receiptgate": {"url": _env("RECEIPTGATE_URL", "http://receiptgate:8000"), "auth": "api_key"},
-        "depotgate": {"url": _env("DEPOTGATE_URL", "http://depotgate:8000"), "auth": "api_key"},
-        "asyncgate": {"url": _env("ASYNCGATE_URL", "http://asyncgate:8080"), "auth": "api_key"},
+        "metagate": {"url": _env("METAGATE_URL", "http://metagate:8000/mcp"), "auth": "api_key"},
+        "receiptgate": {"url": _env("RECEIPTGATE_URL", "http://receiptgate:8000/mcp"), "auth": "api_key"},
+        "depotgate": {"url": _env("DEPOTGATE_URL", "http://depotgate:8000/mcp"), "auth": "api_key"},
+        "asyncgate": {"url": _env("ASYNCGATE_URL", "http://asyncgate:8080/mcp"), "auth": "api_key"},
     }
 
     memory_map = {
@@ -36,7 +36,7 @@ async def main() -> None:
     }
 
     polling = {
-        "asyncgate": {"endpoint": "/v1/poll", "interval_ms": 1000},
+        "asyncgate": {"endpoint": "/mcp", "tool": "asyncgate.lease_next", "interval_ms": 1000},
     }
 
     schemas = {
@@ -166,10 +166,14 @@ async def main() -> None:
         print("\nAPI Key (save this - shown only once):")
         print(f"  {api_key}")
         print("\nBootstrap example:")
-        print("  curl -X POST http://localhost:8100/v1/bootstrap ")
+        print("  curl -X POST http://localhost:8100/mcp ")
         print(f"    -H \"X-API-Key: {api_key}\" ")
         print("    -H \"Content-Type: application/json\" ")
-        print("    -d '{\"component_key\": \"asyncgate_demo\"}'")
+        print(
+            "    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+            "\"params\":{\"name\":\"metagate.bootstrap\",\"arguments\":"
+            "{\"component_key\":\"asyncgate_demo\"}}}'"
+        )
         print("=" * 72)
 
     finally:
