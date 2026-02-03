@@ -121,6 +121,16 @@ class Receipt(BaseModel):
     escalation_to: str = Field(default="NA", description="Escalation target")
     retry_requested: bool = Field(default=False, description="Whether retry is requested")
 
+    # Canonical body (Receipt Protocol Golden) + artifact references
+    body: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Canonical receipt body payload (protocol envelope)",
+    )
+    artifact_refs: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Optional artifact references (Protocol Golden)",
+    )
+
     # Timestamps
     created_at: Optional[datetime] = Field(default=None, description="Issuer clock timestamp")
     stored_at: Optional[datetime] = Field(default=None, description="MemoryGate clock (set on store)")
@@ -253,6 +263,10 @@ class ReceiptCreate(BaseModel):
     escalation_reason: str = "NA"
     escalation_to: str = "NA"
     retry_requested: bool = False
+
+    # Canonical body + artifact references
+    body: dict[str, Any] = Field(default_factory=dict)
+    artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
 
     # Timestamps
     created_at: Optional[datetime] = None
