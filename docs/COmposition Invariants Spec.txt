@@ -1,10 +1,3 @@
-Good. Then we write it like a **warning label etched into steel**—technical first, but with enough gravity that no one skims it and lives happily afterward.
-
-Below is a **single-page specification draft** you can drop directly into the LegiVellum docs.
-Tone: sober, sharp, slightly ceremonial.
-Purpose: collapse combinatorics, prevent accidental gods.
-
----
 
 # LegiVellum Composition Rules
 
