@@ -1,4 +1,3 @@
-
 # LegiVellum Composition Rules
 
 **(Read This First. Seriously.)**
@@ -31,7 +30,7 @@ Design accordingly.
 ## 1. Purpose of This Document
 
 LegiVellum is intentionally composable.
-The same five primitives can be wired together in dozens of valid topologies.
+The same primitives can be wired together in dozens of valid topologies.
 
 This document **does not** define a single “correct” architecture.
 
@@ -120,7 +119,7 @@ CogniGate thinks. It does not plan.
 
 ---
 
-### Delegate — *Planning Only*
+### DeleGate — *Planning Only*
 
 * Accepts a tasking.
 * Produces a plan (a set of intended actions).
@@ -131,7 +130,7 @@ CogniGate thinks. It does not plan.
 * **DOES NOT** supervise workers.
 * **DOES NOT** claim success or failure of individual plan steps.
 
-Delegate plans. It does not execute.
+DeleGate plans. It does not execute.
 
 ---
 
@@ -142,7 +141,7 @@ LegiVellum has no “master executive component.”
 Instead, components may temporarily assume **roles** at runtime:
 
 * **Initiator** — accepts external intent (human, webhook, cron)
-* **Planner** — produces plans (Delegate)
+* **Planner** — produces plans (DeleGate)
 * **Broker** — exchanges responsibility (AsyncGate)
 * **Executor** — runs leases (CogniGate, CLI worker, REST/MCP worker)
 * **Archivist** — remembers truth (MemoryGate)
@@ -167,9 +166,9 @@ To prevent combinatorial collapse, LegiVellum defines **preferred edges**.
 
 ### Preferred (Default) Paths
 
-* Initiator → Delegate → AsyncGate → Executor
+* Initiator → DeleGate → AsyncGate → Executor
 * Executor → MemoryGate (receipts, artifacts)
-* Delegate → MemoryGate (context reads)
+* DeleGate → MemoryGate (context reads)
 * All components → MetaGate (bootstrap/config reads)
 
 ### Discouraged / Exceptional Paths
@@ -179,7 +178,7 @@ To prevent combinatorial collapse, LegiVellum defines **preferred edges**.
 * MemoryGate → AsyncGate
 * MetaGate → AsyncGate
 * AsyncGate → Executor (push instead of pull)
-* CogniGate → Delegate (implicit replanning)
+* CogniGate → DeleGate (implicit replanning)
 * MemoryGate initiating any action
 
 These are not “forbidden,” but every use increases system opacity.
@@ -225,5 +224,3 @@ If something cannot be recorded as a receipt:
 * treat it as local, fallible, and disposable
 
 Break this rule, and the system will punish you—not immediately, but *inevitably*.
-
-

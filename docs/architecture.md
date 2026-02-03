@@ -24,4 +24,4 @@ Receipts are the **only** coordination protocol:
 - `complete` resolves obligation
 - `escalate` transfers responsibility (soft push)
 
-See `spec/receipt.rules.md` for the normative contract.
+See `docs/canonical/receipt.rules.md` for the normative contract.
