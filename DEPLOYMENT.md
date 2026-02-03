@@ -2,6 +2,8 @@
 
 This guide covers deploying the full LegiVellum primitive stack. The LegiVellum repo contains MemoryGate, AsyncGate, and DeleGate. Other primitives live in sibling repos (ReceiptGate, MetaGate, DepotGate, CogniGate, InterView).
 
+V1 note: this stack is explicitly single-tenant. Set one tenant ID and one API key per primitive, and use the same tenant ID across the stack. Multi-tenant isolation is planned; the configuration already keeps tenant IDs explicit to ease the upgrade.
+
 ## Recommended Deployment Order
 
 1. ReceiptGate (or MemoryGate profile acting as ReceiptGate)
@@ -27,13 +29,15 @@ docker-compose down
 ```
 
 Service URLs (default):
-- MemoryGate: http://localhost:8001
-- AsyncGate: http://localhost:8002
-- DeleGate: http://localhost:8003
+- MemoryGate MCP endpoint: http://localhost:8001/mcp
+- AsyncGate MCP endpoint: http://localhost:8002/mcp
+- DeleGate MCP endpoint: http://localhost:8003/mcp
+
+All inter-gate calls are MCP JSON-RPC over HTTP. Any REST endpoints are non-contract and may be removed.
 
 ## Authentication
 
-LegiVellum uses API keys for tenant scoping in the MVP. The header `X-API-Key` determines the `tenant_id` used in the database. In production, replace with JWT-backed auth.
+LegiVellum uses API keys for tenant scoping in the MVP. The header `X-API-Key` (or `Authorization: Bearer <token>`) determines the `tenant_id` used in the database. In production, replace with JWT-backed auth.
 
 ## Fly.io Deployment
 
@@ -93,6 +97,7 @@ fly launch --name legivellum-receiptgate --no-deploy
 fly secrets set RECEIPTGATE_DATABASE_URL="postgresql+asyncpg://..."
 fly secrets set RECEIPTGATE_API_KEY="your-receiptgate-key"
 fly secrets set RECEIPTGATE_ALLOW_INSECURE_DEV="false"
+fly secrets set RECEIPTGATE_DEFAULT_TENANT_ID="your-tenant"
 fly secrets set RECEIPTGATE_ENABLE_GRAPH_LAYER="false"
 fly secrets set RECEIPTGATE_ENABLE_SEMANTIC_LAYER="false"
 fly deploy
@@ -156,7 +161,7 @@ fly deploy
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | Required |
 | `LEGIVELLUM_API_KEY` | API key for auth | None |
-| `LEGIVELLUM_TENANT_ID` | Default tenant for auth | pstryder |
+| `LEGIVELLUM_TENANT_ID` | Default tenant for auth (single-tenant v1) | pstryder |
 | `ENABLE_METRICS` | Enable Prometheus metrics | false |
 | `SQL_ECHO` | SQLAlchemy echo logging | false |
 
@@ -176,6 +181,8 @@ fly deploy
 | `PORT` | Service port | 8002 |
 | `MEMORYGATE_URL` | MemoryGate URL | http://memorygate:8001 |
 | `LEASE_DURATION_SECONDS` | Lease timeout | 900 |
+| `ASYNCGATE_RECEIPTGATE_URL` | ReceiptGate MCP base URL | None |
+| `ASYNCGATE_RECEIPTGATE_API_KEY` | ReceiptGate auth token | None |
 
 ### DeleGate
 
@@ -191,6 +198,7 @@ fly deploy
 |----------|-------------|---------|
 | `RECEIPTGATE_DATABASE_URL` | PostgreSQL connection string | Required |
 | `RECEIPTGATE_API_KEY` | API key for auth | None |
+| `RECEIPTGATE_DEFAULT_TENANT_ID` | Default tenant (single-tenant v1) | default |
 | `RECEIPTGATE_ALLOW_INSECURE_DEV` | Disable auth (dev only) | false |
 | `RECEIPTGATE_AUTO_MIGRATE_ON_STARTUP` | Apply migrations on startup | true |
 | `RECEIPTGATE_ENABLE_GRAPH_LAYER` | Optional graph features | false |
@@ -245,11 +253,12 @@ fly deploy
 - Rotate keys regularly; treat all API keys as tenant-scoped credentials.
 - Never commit `.env` files or secrets to git.
 
-## Multi-Tenant Setup
+## Multi-Tenant Setup (Future)
 
 - Tenant isolation is enforced by `tenant_id` in the database and resolved from auth.
 - Use distinct API keys per tenant; map keys to tenants in auth logic or JWT claims.
 - For hard isolation, run separate databases or separate Fly apps per tenant.
+- V1 runs single-tenant: set one tenant ID everywhere and one API key per primitive.
 
 ## Monitoring and Observability
 
@@ -270,7 +279,7 @@ fly deploy
 - [ ] Secrets set in Fly (DB URLs, API keys, JWT secrets, AI keys)
 - [ ] ReceiptGate and MetaGate healthy
 - [ ] MemoryGate health + readiness OK
-- [ ] AsyncGate emits receipts to ReceiptGate/MemoryGate
+- [ ] AsyncGate emits receipts to ReceiptGate (MCP)
 - [ ] DeleGate can create plans and queue tasks
 - [ ] Workers (CogniGate or other) can accept leases and emit receipts
 - [ ] InterView is read-only and returns receipt views
