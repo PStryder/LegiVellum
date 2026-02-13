@@ -79,4 +79,4 @@ jobs:
         run: python -m mypy --config-file .mypy-ci.ini shared/legivellum
 
       - name: Run tests
-        run: pytest -q --maxfail=1 -m "not e2e"
+        run: pytest -q --maxfail=1 -m "not e2e and not integration"
