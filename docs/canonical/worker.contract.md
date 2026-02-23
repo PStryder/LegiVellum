@@ -189,7 +189,7 @@ sequenceDiagram
     "dedupe_key": "lease-789"
   },
   "receipt_routing": {
-    "endpoint": "https://receiptgate.internal/receipts",
+    "endpoint": "https://receiptgate.internal/mcp",
     "auth_ref": "secrets/receiptgate_token",
     "schema_version": "1.0"
   },
@@ -237,5 +237,6 @@ See:
 - `receipt.rules.md`
 - `receipt.schema.v1.json`
 - `receipt.store.md`
+- `mcp.naming.md`
 
 All documents are in `LegiVellum/docs/canonical/`.

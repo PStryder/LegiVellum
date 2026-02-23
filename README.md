@@ -21,11 +21,15 @@ LegiVellum separates cognition, authority, memory, time, matter, and oversight i
 |-----------|------|-------------|
 | **CogniGate** | Bounded cognition | Reasoning without side effects |
 | **DeleGate** | Planning authority | Intent to obligations (produces Plans) |
-| **MemoryGate** | Durable memory | Semantic memory and receipt ledger |
+| **MemoryGate** | Durable memory | Semantic memory, search, and long-horizon knowledge services |
 | **AsyncGate** | Time boundary | Async execution and lease management |
 | **DepotGate** | Matter vault | Artifact storage and lifecycle |
 | **MetaGate** | System warden | Bootstrap, topology, and lifecycle |
 | **InterView** | Observation | Read-only introspection |
+
+Receipt ledger role: `ReceiptGate` is the canonical obligation ledger surface.
+In deployments that embed ledger capabilities into MemoryGate, this is treated
+as a ReceiptGate profile and must preserve the `receiptgate.*` MCP contract.
 
 ## Receipt Protocol
 
@@ -119,7 +123,8 @@ LegiVellum components have standalone implementations:
 - [CogniGate](../CogniGate) - Cognitive execution worker
 - [DepotGate](../DepotGate) - Artifact storage
 - [MetaGate](../MetaGate) - System management
-- [memorygate](../memorygate) - Memory and receipt storage
+- [MemoryGate](../MemoryGate) - Durable memory and semantic retrieval
+- [ReceiptGate](../ReceiptGate) - Canonical receipt ledger
 
 ## License
 

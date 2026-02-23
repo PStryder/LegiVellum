@@ -22,11 +22,22 @@ Normative keywords (MUST/SHOULD/MAY/etc.) follow RFC 2119 semantics.
 
 ### Worker compatibility
 - `worker.contract.md` — minimum contract for a generic MCP worker
+- `mcp.naming.md` — canonical MCP tool naming and compatibility rules
+
+### Supervision / intake patterns
+- `proctor.pattern.md` — Proctor pattern (intake + supervision + master obligation)
 
 ### Vellum language
 - `vellum.spec.md` — Vellum language specification (draft)
 
 ## Design intent (why these exist)
+
+## Service Role Mapping
+
+- `ReceiptGate` is the canonical receipt ledger contract (`receiptgate.*` tools).
+- `MemoryGate` is the canonical durable memory/search contract (`memory_*` tools).
+- If receipts are implemented as a MemoryGate profile, the runtime must still
+  preserve the ReceiptGate MCP surface and semantics.
 
 LegiVellum is designed so that:
 - bodies/processes can die,

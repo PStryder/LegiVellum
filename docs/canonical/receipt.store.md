@@ -16,7 +16,7 @@ ReceiptGate terminology throughout.
 ReceiptGate is the **single-writer receipt store** and **source of truth** for all coordination in the LegiVellum system.
 
 **Core Responsibilities:**
-1. Accept receipt POST requests from components
+1. Accept receipt submission requests (`receiptgate.submit_receipt`) from components
 2. Validate receipts against schema
 3. Store receipts in PostgreSQL (append-only ledger)
 4. Provide inbox and timeline queries
