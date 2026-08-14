@@ -32,6 +32,7 @@ SERVICES: dict[str, tuple[str, str]] = {
     "asyncgate": ("ASYNCGATE_URL", "http://localhost:8400"),
     "delegate": ("DELEGATE_URL", "http://localhost:8700"),
     "interrogate": ("INTERROGATE_URL", "http://localhost:8800"),
+    "cognigate": ("COGNIGATE_URL", "http://localhost:8500"),
     "interview": ("INTERVIEW_URL", "http://localhost:8600"),
 }
 

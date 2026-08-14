@@ -290,8 +290,13 @@ services:
       context: ../../CogniGate
       dockerfile: Dockerfile
     container_name: problemata-cognigate
-    profiles: ["cognigate"]
+    # No longer profiled. It defaults to the stub AI provider, which answers
+    # locally and deterministically, so the lease -> execute -> artifact ->
+    # receipt path runs in CI without a model or an API key. Point it at a real
+    # provider with COGNIGATE_AI_PROVIDER=openrouter and a key.
     environment:
+      COGNIGATE_AI_PROVIDER: ${COGNIGATE_AI_PROVIDER:-stub}
+      COGNIGATE_PROFILES_DIR: /opt/cognigate/profiles
       COGNIGATE_STANDALONE_MODE: "false"
       COGNIGATE_ASYNCGATE_ENDPOINT: http://asyncgate:8080
       COGNIGATE_ASYNCGATE_AUTH_TOKEN: ${ASYNCGATE_API_KEY:-dev_asyncgate_key}
@@ -300,8 +305,9 @@ services:
       COGNIGATE_RECEIPTGATE_EMIT_RECEIPTS: "true"
       COGNIGATE_RECEIPTGATE_AUTH_TOKEN: ""
       COGNIGATE_AI_ENDPOINT: ${COGNIGATE_AI_ENDPOINT:-https://openrouter.ai/api/v1}
-      COGNIGATE_AI_API_KEY: ${COGNIGATE_AI_API_KEY}
+      COGNIGATE_AI_API_KEY: ${COGNIGATE_AI_API_KEY:-}
       COGNIGATE_AI_MODEL: ${COGNIGATE_AI_MODEL:-anthropic/claude-3-opus}
+      COGNIGATE_METAGATE_ENDPOINT: http://metagate:8000
       COGNIGATE_API_KEY: ${COGNIGATE_API_KEY:-}
       COGNIGATE_REQUIRE_AUTH: "false"
       COGNIGATE_ALLOW_INSECURE_DEV: "true"
@@ -312,6 +318,11 @@ services:
       - "8500:8000"
     volumes:
       - ./cognigate_config:/etc/cognigate:ro
+      # Instruction profiles, mounted outside /etc/cognigate because a mount
+      # cannot nest inside another read-only mount. COGNIGATE_PROFILES_DIR
+      # points at them. Uses the profiles the repo already ships rather than
+      # duplicating them into the demo.
+      - ../../CogniGate/config/profiles:/opt/cognigate/profiles:ro
       - ../../LegiVellum/shared:/LegiVellum/shared:ro
     depends_on:
       asyncgate:

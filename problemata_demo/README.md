@@ -5,7 +5,7 @@ MetaGate, ReceiptGate, AsyncGate, DepotGate, InterView, DeleGate, InterroGate,
 and (behind a profile) CogniGate.
 
 Service ports: MetaGate 8100, DepotGate 8200, ReceiptGate 8300, AsyncGate 8400,
-CogniGate 8500, InterView 8600, DeleGate 8700, InterroGate 8800.
+CogniGate 8500 (stub AI), InterView 8600, DeleGate 8700, InterroGate 8800.
 
 ## Quick Start
 
@@ -82,12 +82,19 @@ AsyncGate keeps `ASYNCGATE_RECEIPTGATE_URL` configured, so explicit
 configuration still wins and a bootstrap regression cannot break the other
 paths. The proof is that the gate reached MetaGate and resolved the manifest.
 
-## Optional CogniGate
+## CogniGate
 
-CogniGate is behind the `cognigate` profile to avoid requiring an AI key:
+CogniGate runs by default using a **stub AI provider**: it answers locally and
+deterministically, so the lease -> plan -> execute -> complete path runs with
+no model and no API key. Stub output is prefixed `[stub]` and reports its model
+as `stub/echo`, so it is recognisable if it ever reaches an artifact.
+
+To run it against a real provider:
 
 ```bash
-docker compose --profile cognigate up -d
+export COGNIGATE_AI_PROVIDER=openrouter
+export COGNIGATE_AI_API_KEY=sk-...
+docker compose up -d cognigate
 ```
 
 ## Service Ports (host -> container)
