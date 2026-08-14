@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LegiVellum Problemata Control</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="background-glow"></div>
+  <header class="hero">
+    <p class="eyebrow">LegiVellum</p>
+    <h1>Problemata Control Fabric</h1>
+    <p class="subtitle">Compose blueprint inputs, validate atomic rules, and register Problemata specs.</p>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <h2>Blueprint</h2>
+      <div class="grid two-col">
+        <label>Problemata ID <input id="problemata_id" value="prob-alpha"></label>
+        <label>Version <input id="version" value="0.1.0"></label>
+        <label>Tenant ID <input id="tenant_id" value="tenant-core"></label>
+        <label>Owner Principal <input id="owner_principal" value="agent.control"></label>
+        <label>Endpoint Base <input id="endpoint_base" value="http://localhost"></label>
+        <label>Trust Domain <input id="trust_domain" value="default"></label>
+        <label>Receipt Schema <input id="receipt_schema_version" value="1.0"></label>
+        <label>Depot Sink <input id="depot_default_sink" value="filesystem"></label>
+        <label>CogniGate Model <input id="cgn_model" value="anthropic/claude-3-opus"></label>
+        <label>DeleGate Model <input id="dlg_model" value="gpt-4.1"></label>
+        <label>Policy Profile <input id="interrogate_policy_profile_id" value="default-policy"></label>
+        <label>Async TTL Seconds <input id="async_lease_ttl_seconds" type="number" min="1" value="300"></label>
+        <label>Async Max Attempts <input id="async_max_attempts" type="number" min="1" value="3"></label>
+        <label>Async Backoff Seconds <input id="async_retry_backoff_seconds" type="number" min="1" value="15"></label>
+      </div>
+      <label>Description <textarea id="description" rows="2" placeholder="Optional narrative for this Problemata."></textarea></label>
+
+      <div class="switches">
+        <label><input id="include_asyncgate" type="checkbox" checked> AsyncGate</label>
+        <label><input id="include_cognigate" type="checkbox"> CogniGate</label>
+        <label><input id="include_delegategate" type="checkbox"> DeleGate</label>
+        <label><input id="include_interrogate" type="checkbox" checked> InterroGate</label>
+        <label><input id="include_interview" type="checkbox"> InterView</label>
+        <label><input id="include_memorygate" type="checkbox" checked> MemoryGate</label>
+      </div>
+
+      <div class="actions">
+        <button id="preview-btn" type="button">Preview Spec</button>
+        <button id="create-blueprint-btn" type="button">Create From Blueprint</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Spec JSON</h2>
+      <p id="selected-line" class="selected-line">Editing: none</p>
+      <textarea id="spec-json" rows="24" spellcheck="false" placeholder="Previewed or custom Problemata JSON appears here."></textarea>
+      <div class="actions">
+        <button id="validate-btn" type="button">Validate Spec</button>
+        <button id="register-btn" type="button">Register Raw Spec</button>
+        <button id="update-btn" type="button" disabled>Update Selected</button>
+      </div>
+      <p id="status-line" class="status-line"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Validation + Registry</h2>
+      <pre id="validation-output" class="output-box">No validation run yet.</pre>
+      <div class="actions compact">
+        <button id="refresh-btn" type="button">Refresh Registry</button>
+      </div>
+      <ul id="registry-list" class="registry-list"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Topology Graph</h2>
+      <div class="graph-shell">
+        <svg id="topology-graph" viewBox="0 0 900 520" role="img" aria-label="Problemata topology graph"></svg>
+      </div>
+      <ul id="edge-diagnostics" class="edge-diagnostics"></ul>
+    </section>
+  </main>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

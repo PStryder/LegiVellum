@@ -11,6 +11,23 @@ from .problemata_validation import (
     ValidationLayer,
     ValidationContext,
 )
+from .problemata_control import (
+    apply_problemata_migrations,
+    AsyncProblemataControlService,
+    compile_problemata_blueprint,
+    create_default_postgres_problemata_service,
+    InMemoryProblemataRepository,
+    PostgresProblemataRepository,
+    ProblemataBlueprint,
+    ProblemataControlService,
+    ProblemataDiagnosticsResult,
+    ProblemataDiagnosticsStatus,
+    ProblemataEdgeDiagnostic,
+    ProblemataRecord,
+    ProblemataStatus,
+    ProblemataTopologyNode,
+)
+from .problemata_control_ui import create_app as create_problemata_control_ui_app
 
 __all__ = [
     "Receipt",
@@ -24,4 +41,19 @@ __all__ = [
     "ProblemataValidationResult",
     "ValidationLayer",
     "ValidationContext",
+    "apply_problemata_migrations",
+    "AsyncProblemataControlService",
+    "compile_problemata_blueprint",
+    "create_default_postgres_problemata_service",
+    "InMemoryProblemataRepository",
+    "PostgresProblemataRepository",
+    "ProblemataBlueprint",
+    "ProblemataControlService",
+    "ProblemataDiagnosticsResult",
+    "ProblemataDiagnosticsStatus",
+    "ProblemataEdgeDiagnostic",
+    "ProblemataRecord",
+    "ProblemataStatus",
+    "ProblemataTopologyNode",
+    "create_problemata_control_ui_app",
 ]

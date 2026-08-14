@@ -285,10 +285,33 @@ CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(tenant_id, status);
 -- COMMENTS
 -- ============================================================================
 
+-- ============================================================================
+-- PROBLEMATA REGISTRY TABLE (Problemata Control)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS problemata_registry (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    problemata_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('validated', 'rejected')),
+    source TEXT NOT NULL,
+    spec_hash TEXT,
+    validation JSONB NOT NULL,
+    spec JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT unique_problemata_registry_id UNIQUE (problemata_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_problemata_registry_status ON problemata_registry(status);
+CREATE INDEX IF NOT EXISTS idx_problemata_registry_created_at ON problemata_registry(created_at);
+CREATE INDEX IF NOT EXISTS idx_problemata_registry_updated_at ON problemata_registry(updated_at);
+
 COMMENT ON TABLE receipts IS 'LegiVellum receipt store - immutable audit ledger for task coordination';
 COMMENT ON TABLE tasks IS 'AsyncGate task queue - work items waiting for execution';
 COMMENT ON TABLE plans IS 'DeleGate plans - structured delegation plans from intents';
 COMMENT ON TABLE workers IS 'DeleGate worker registry - known workers for task routing';
+COMMENT ON TABLE problemata_registry IS 'Problemata control registry - validated/rejected specs and diagnostics';
 
 -- Grant permissions (adjust as needed)
 -- GRANT SELECT, INSERT ON receipts TO memorygate_service;
