@@ -77,6 +77,20 @@ jobs:
           path: ReceiptGate
           fetch-depth: 1
 
+      - name: Checkout DeleGate
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/DeleGate
+          path: DeleGate
+          fetch-depth: 1
+
+      - name: Checkout InterroGate
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/InterroGate
+          path: InterroGate
+          fetch-depth: 1
+
       - name: Checkout InterView
         uses: actions/checkout@v4
         with:

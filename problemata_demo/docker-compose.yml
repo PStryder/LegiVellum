@@ -111,6 +111,78 @@ services:
       - -c
       - pip install --no-cache-dir /app/interview && python -m uvicorn interview.main:app --host 0.0.0.0 --port 8000
 
+  delegate-db:
+    image: postgres:16-alpine
+    container_name: problemata-delegate-db
+    environment:
+      POSTGRES_USER: delegate
+      POSTGRES_PASSWORD: delegate
+      POSTGRES_DB: delegate
+    volumes:
+      - delegate_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U delegate -d delegate"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Planning authority. Mints obligations; never executes them.
+  delegate:
+    build:
+      context: ../../DeleGate
+      dockerfile: Dockerfile
+    container_name: problemata-delegate
+    environment:
+      DELEGATE_DATABASE_URL: postgresql+asyncpg://delegate:delegate@delegate-db:5432/delegate
+      DELEGATE_API_KEY: ${DELEGATE_API_KEY:-dev_delegate_key}
+      DELEGATE_ALLOW_INSECURE_DEV: "true"
+      DELEGATE_RECEIPTGATE_URL: http://receiptgate:8000
+      DELEGATE_METAGATE_ENDPOINT: http://metagate:8000
+    ports:
+      - "8700:8000"
+    depends_on:
+      delegate-db:
+        condition: service_healthy
+      receiptgate:
+        condition: service_started
+    volumes:
+      # The shared MetaGate bootstrap client is resolved from a sibling
+      # LegiVellum checkout; inside the container that is this mount.
+      - ../../LegiVellum/shared:/LegiVellum/shared:ro
+    # DeleGate keeps alembic.ini under migrations/ rather than at the repo
+    # root, so alembic must be pointed at it explicitly; script_location inside
+    # that file is relative to the invocation directory, which is /app.
+    command: >
+      sh -c "
+        echo 'Running DeleGate migrations...' &&
+        alembic -c migrations/alembic.ini upgrade head &&
+        echo 'Starting DeleGate...' &&
+        uvicorn delegate.main:app --host 0.0.0.0 --port 8000
+      "
+
+  # Admission control. ALLOW or DENY only; no orchestration, no storage.
+  interrogate:
+    image: python:3.11-slim
+    container_name: problemata-interrogate
+    working_dir: /app/interrogate
+    environment:
+      INTERROGATE_ALLOW_INSECURE_DEV: "true"
+      INTERROGATE_RECEIPTGATE_URL: http://receiptgate:8000/mcp
+      INTERROGATE_METAGATE_URL: http://metagate:8000/mcp
+      INTERROGATE_METAGATE_ENDPOINT: http://metagate:8000
+    ports:
+      - "8800:8000"
+    depends_on:
+      - receiptgate
+      - metagate
+    volumes:
+      - ../../InterroGate:/app/interrogate
+      - ../../LegiVellum/shared:/LegiVellum/shared:ro
+    command:
+      - sh
+      - -c
+      - pip install --no-cache-dir /app/interrogate && python -m uvicorn interrogate.mcp:app --host 0.0.0.0 --port 8000
+
   asyncgate-db:
     image: postgres:16-alpine
     container_name: problemata-asyncgate-db
@@ -256,6 +328,7 @@ volumes:
   depotgate_staging:
   depotgate_shipped:
   receiptgate_data:
+  delegate_pg:
 
 networks:
   default:

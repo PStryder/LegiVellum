@@ -181,4 +181,19 @@ def create_app(service: Any | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+def __getattr__(name: str):
+    """Build the app on first access rather than on import.
+
+    `app = create_app()` at module scope meant that importing anything from
+    legivellum constructed a FastAPI application and mounted static files from
+    disk. A gate that only wanted the canonical Receipt model crashed on
+    startup because tools/problemata_control_ui/assets was not present -- the
+    control UI's asset tree is not something a primitive should need.
+
+    PEP 562 module __getattr__ keeps `from legivellum.problemata_control_ui
+    import app` working for the server entrypoint, without paying for it on
+    every import.
+    """
+    if name == "app":
+        return create_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

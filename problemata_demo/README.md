@@ -1,7 +1,11 @@
 # Problemata Demo Stack (P2-001)
 
-This folder contains a local docker-compose assembly for the minimal Problemata
-stack: MetaGate, ReceiptGate, AsyncGate, CogniGate, and DepotGate.
+This folder contains a local docker-compose assembly for the Problemata stack:
+MetaGate, ReceiptGate, AsyncGate, DepotGate, InterView, DeleGate, InterroGate,
+and (behind a profile) CogniGate.
+
+Service ports: MetaGate 8100, DepotGate 8200, ReceiptGate 8300, AsyncGate 8400,
+CogniGate 8500, InterView 8600, DeleGate 8700, InterroGate 8800.
 
 ## Quick Start
 
