@@ -1,0 +1,125 @@
+name: Stack
+
+# End-to-end gate for the problemata demo stack.
+#
+# The per-repo CI suites test each primitive in isolation, and five of them
+# run `docker build` -- but nothing ran the assembled stack. Every container
+# bug found on 2026-08-14 (ReceiptGate resolving its schema outside the
+# package, DepotGate's parents[4] IndexError, AsyncGate passing structlog
+# kwargs to a stdlib logger) built a clean image and then failed at runtime.
+# This workflow runs the thing.
+#
+# The compose file builds from sibling checkouts (../../AsyncGate etc.), so
+# every repo is checked out beside LegiVellum inside the workspace. Siblings
+# are taken from their default branch: this gates the integration surface, not
+# any single repo's pending changes.
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+  # Siblings are separate repositories, so a push to AsyncGate or ReceiptGate
+  # cannot trigger this workflow -- and those are exactly where the container
+  # bugs lived. A nightly run bounds how long cross-repo drift can hide.
+  # Wiring each gate to fire this on push needs a cross-repo dispatch token;
+  # until that exists, this is the backstop.
+  schedule:
+    - cron: "0 7 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      ASYNCGATE_API_KEY: dev_asyncgate_key
+      COMPOSE_DIR: LegiVellum/problemata_demo
+
+    steps:
+      - name: Checkout LegiVellum
+        uses: actions/checkout@v4
+        with:
+          path: LegiVellum
+
+      - name: Checkout AsyncGate
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/AsyncGate
+          path: AsyncGate
+          fetch-depth: 1
+
+      - name: Checkout MetaGate
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/MetaGate
+          path: MetaGate
+          fetch-depth: 1
+
+      - name: Checkout DepotGate
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/DepotGate
+          path: DepotGate
+          fetch-depth: 1
+
+      - name: Checkout ReceiptGate
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/ReceiptGate
+          path: ReceiptGate
+          fetch-depth: 1
+
+      # Not started: it sits behind the `cognigate` profile and needs an AI
+      # key, and compose does not resolve profiled build contexts. Checked out
+      # so `docker compose --profile cognigate` works here when that lands.
+      - name: Checkout CogniGate
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/CogniGate
+          path: CogniGate
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Start stack
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: docker compose up -d --build
+
+      - name: Wait for services
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python wait_for_stack.py --timeout 300
+
+      - name: Golden path
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python golden_path.py
+
+      - name: Escalation path
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python escalation_path.py
+
+      - name: Diagnostics on failure
+        if: failure()
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: |
+          echo "::group::container status"
+          docker compose ps -a
+          echo "::endgroup::"
+          echo "::group::logs"
+          docker compose logs --no-color --tail 200
+          echo "::endgroup::"
+
+      - name: Tear down
+        if: always()
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: docker compose down -v --remove-orphans

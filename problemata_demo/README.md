@@ -78,6 +78,30 @@ docker compose --profile cognigate up -d
 - Profile key: `PROBLEMATA_PROFILE_KEY`
 - Manifest key: `PROBLEMATA_MANIFEST_KEY`
 
+## Waiting for readiness
+
+`docker compose up -d` returns before the stack can serve traffic: ReceiptGate
+and DepotGate have no healthcheck, and ReceiptGate pip-installs itself on
+container start. Block until every service answers its MCP health tool:
+
+```bash
+python wait_for_stack.py --timeout 300
+```
+
+It exits non-zero and names whatever never came up.
+
+## Continuous integration
+
+The `Stack` workflow (`.github/workflows/stack.yml`) runs exactly this
+sequence on every push and PR, plus nightly: build the stack, wait for
+readiness, then run both demo scripts. Sibling repositories are checked out
+beside LegiVellum from their default branches, so the workflow gates the
+integration surface rather than any single repo's pending changes.
+
+A push to AsyncGate or ReceiptGate cannot trigger a workflow in this
+repository, which is why the nightly run exists. Wiring each gate to dispatch
+this workflow on push requires a cross-repo token.
+
 ## Next
 
 Use this stack with the golden path and escalation demo scripts (P2-002/P2-003).
