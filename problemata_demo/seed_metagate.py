@@ -23,11 +23,36 @@ async def main() -> None:
     profile_key = _env("PROBLEMATA_PROFILE_KEY", "problemata-demo-profile")
     manifest_key = _env("PROBLEMATA_MANIFEST_KEY", "problemata-demo-manifest")
 
+    # Same shape metagate.instantiate_problemata emits for a published
+    # Problemata: {type, endpoint, config}. Components resolve peers by *type*
+    # -- refs are Problemata-authored names, types are contract vocabulary --
+    # so a hand-seeded manifest and a published one must not disagree.
+    # `url` is retained alongside `endpoint` for older readers.
     services = {
-        "metagate": {"url": _env("METAGATE_URL", "http://metagate:8000/mcp"), "auth": "api_key"},
-        "receiptgate": {"url": _env("RECEIPTGATE_URL", "http://receiptgate:8000/mcp"), "auth": "api_key"},
-        "depotgate": {"url": _env("DEPOTGATE_URL", "http://depotgate:8000/mcp"), "auth": "api_key"},
-        "asyncgate": {"url": _env("ASYNCGATE_URL", "http://asyncgate:8080/mcp"), "auth": "api_key"},
+        "metagate": {
+            "type": "metagate",
+            "endpoint": _env("METAGATE_URL", "http://metagate:8000/mcp"),
+            "url": _env("METAGATE_URL", "http://metagate:8000/mcp"),
+            "config": {"auth": "api_key"},
+        },
+        "receiptgate": {
+            "type": "receiptgate",
+            "endpoint": _env("RECEIPTGATE_URL", "http://receiptgate:8000/mcp"),
+            "url": _env("RECEIPTGATE_URL", "http://receiptgate:8000/mcp"),
+            "config": {"auth": "api_key"},
+        },
+        "depotgate": {
+            "type": "depotgate",
+            "endpoint": _env("DEPOTGATE_URL", "http://depotgate:8000/mcp"),
+            "url": _env("DEPOTGATE_URL", "http://depotgate:8000/mcp"),
+            "config": {"auth": "api_key"},
+        },
+        "asyncgate": {
+            "type": "asyncgate",
+            "endpoint": _env("ASYNCGATE_URL", "http://asyncgate:8080/mcp"),
+            "url": _env("ASYNCGATE_URL", "http://asyncgate:8080/mcp"),
+            "config": {"auth": "api_key"},
+        },
     }
 
     memory_map = {
