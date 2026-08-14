@@ -82,4 +82,4 @@ jobs:
         run: python tools/validate_all_examples.py
 
       - name: Run tests
-        run: pytest -q --maxfail=1 -m "not e2e and not integration"
+        run: pytest -q --maxfail=1

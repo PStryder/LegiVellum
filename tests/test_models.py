@@ -190,9 +190,12 @@ class TestReceiptModel:
         assert json_data["metadata"] == {"note": "test"}
 
     def test_receipt_matches_json_schema(self):
-        """Receipt model should validate against spec/receipt.schema.v1.json"""
+        """Receipt model should validate against the canonical receipt schema"""
         jsonschema = pytest.importorskip("jsonschema")
-        schema_path = Path(__file__).resolve().parents[1] / "spec" / "receipt.schema.v1.json"
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "docs" / "canonical" / "receipt.schema.v1.json"
+        )
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
         receipt = Receipt(

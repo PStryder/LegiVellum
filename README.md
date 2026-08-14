@@ -86,15 +86,17 @@ LegiVellum/
 │   ├── validation.py      # Receipt validation
 │   ├── database.py        # Database utilities
 │   └── auth.py            # Authentication
-├── components/            # Service components
-│   ├── asyncgate/         # AsyncGate service
-│   ├── memorygate/        # MemoryGate service
-│   └── delegate/          # DeleGate service
-├── spec/                  # Legacy specifications
-├── schema/                # SQL schemas
+│   └── problemata_control.py  # Problemata control plane
+├── tools/                 # Validators and the Problemata control UI
+├── schema/                # SQL schemas and migrations
+├── examples/              # Canonical receipts and a reference worker
+├── problemata_demo/       # Runnable multi-service demo stack
 ├── tests/                 # Test suite
-└── docs/                  # Documentation
+└── docs/canonical/        # Normative specifications (source of truth)
 ```
+
+Primitive implementations live in their own repositories alongside this one
+(`../AsyncGate`, `../ReceiptGate`, …). The demo stack builds from those.
 
 ## Core Invariants
 

@@ -2,7 +2,7 @@
 LegiVellum Receipt Models
 
 Pydantic models for the LegiVellum receipt protocol.
-Based on spec/receipt.rules.md and spec/receipt.schema.v1.json.
+Based on docs/canonical/receipt.rules.md and docs/canonical/receipt.schema.v1.json.
 """
 from datetime import datetime
 from enum import Enum
@@ -146,7 +146,7 @@ class Receipt(BaseModel):
 
     @model_validator(mode='after')
     def validate_phase_constraints(self) -> 'Receipt':
-        """Validate phase-specific constraints per spec/receipt.rules.md"""
+        """Validate phase-specific constraints per docs/canonical/receipt.rules.md"""
 
         if self.phase == Phase.ACCEPTED:
             # accepted phase rules

@@ -17,21 +17,27 @@ V1 note: this stack is explicitly single-tenant. Set one tenant ID and one API k
 
 ## Local Development (Docker Compose)
 
+The runnable stack lives in `problemata_demo/`, which builds the primitives
+from their own repositories (`../AsyncGate`, `../MetaGate`, `../DepotGate`,
+`../CogniGate`) and runs ReceiptGate alongside them.
+
 ```bash
-# From this repo (MemoryGate + AsyncGate + DeleGate)
-docker-compose up -d
+cd problemata_demo
+docker compose up -d --build
 
-docker-compose ps
-
-docker-compose logs -f
-
-docker-compose down
+docker compose ps
+docker compose logs -f
+docker compose down -v
 ```
 
 Service URLs (default):
-- MemoryGate MCP endpoint: http://localhost:8001/mcp
-- AsyncGate MCP endpoint: http://localhost:8002/mcp
-- DeleGate MCP endpoint: http://localhost:8003/mcp
+- MetaGate MCP endpoint: http://localhost:8100/mcp
+- DepotGate MCP endpoint: http://localhost:8200/mcp
+- ReceiptGate MCP endpoint: http://localhost:8300/mcp
+- AsyncGate MCP endpoint: http://localhost:8400/mcp
+
+Verify the stack with `python golden_path.py` and `python escalation_path.py`
+from that directory.
 
 All inter-gate calls are MCP JSON-RPC over HTTP. Any REST endpoints are non-contract and may be removed.
 
