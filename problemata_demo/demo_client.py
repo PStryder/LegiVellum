@@ -196,21 +196,15 @@ class DepotGateClient:
         artifact_role: str = "final_output",
     ) -> dict[str, Any]:
         content_base64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "stage_artifact",
-                "arguments": {
-                    "root_task_id": root_task_id,
-                    "content_base64": content_base64,
-                    "mime_type": mime_type,
-                    "artifact_role": artifact_role,
-                },
+        return self._mcp_call(
+            "depotgate.stage_artifact",
+            {
+                "root_task_id": root_task_id,
+                "content_base64": content_base64,
+                "mime_type": mime_type,
+                "artifact_role": artifact_role,
             },
-        }
-        return self._mcp_call("stage_artifact", payload["params"]["arguments"])
+        )
 
 
 class ReceiptGateClient:
