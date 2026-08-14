@@ -51,6 +51,20 @@ python observe_path.py                 # run a task, then observe it
 python observe_path.py --task-id UUID  # observe an existing task
 ```
 
+Topology path — authors a Problemata in the control plane, publishes it to
+MetaGate, and bootstraps a component into the resulting topology. Requires the
+seed, which issues two deliberately separate credentials: an **admin operator**
+that may publish topology, and a **component owner** that may only bootstrap
+into it.
+
+```bash
+docker compose --profile seed run --rm metagate-seed
+# export the two keys the seed prints
+export METAGATE_API_KEY=mgk_...        # operator (admin)
+export METAGATE_OWNER_API_KEY=mgk_...  # owner (component)
+python topology_path.py
+```
+
 ## Optional CogniGate
 
 CogniGate is behind the `cognigate` profile to avoid requiring an AI key:

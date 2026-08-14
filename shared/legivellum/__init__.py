@@ -28,6 +28,7 @@ from .problemata_control import (
     ProblemataTopologyNode,
 )
 from .problemata_control_ui import create_app as create_problemata_control_ui_app
+from .problemata_publish import MetaGatePublisher, ProblemataPublishError
 
 __all__ = [
     "Receipt",
@@ -56,4 +57,6 @@ __all__ = [
     "ProblemataStatus",
     "ProblemataTopologyNode",
     "create_problemata_control_ui_app",
+    "MetaGatePublisher",
+    "ProblemataPublishError",
 ]

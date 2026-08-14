@@ -151,6 +151,73 @@ async def main() -> None:
             principal_row["id"],
         )
 
+        # Operator principal. Publishing a Problemata materializes principals,
+        # profiles, manifests and bindings, so it needs admin privilege --
+        # deliberately a different principal from the component above, which
+        # only bootstraps. Components must never be able to rewrite topology.
+        operator_key = _env("PROBLEMATA_OPERATOR_KEY", "problemata-demo-operator")
+        operator_subject = _env("PROBLEMATA_OPERATOR_SUBJECT", "problemata-demo-operator-subject")
+        await conn.execute(
+            """
+            INSERT INTO principals (id, tenant_key, principal_key, auth_subject, principal_type, status)
+            VALUES ($1, $2, $3, $4, 'admin', 'active')
+            ON CONFLICT (principal_key) DO NOTHING
+            """,
+            uuid4(),
+            tenant_key,
+            operator_key,
+            operator_subject,
+        )
+        operator_row = await conn.fetchrow(
+            "SELECT id FROM principals WHERE principal_key = $1", operator_key
+        )
+        operator_api_key = f"mgk_{secrets.token_urlsafe(32)}"
+        await conn.execute(
+            """
+            INSERT INTO api_keys (id, tenant_key, key_hash, principal_id, name, status)
+            VALUES ($1, $2, $3, $4, 'Problemata Demo Operator Key', 'active')
+            ON CONFLICT (key_hash) DO NOTHING
+            """,
+            uuid4(),
+            tenant_key,
+            hashlib.sha256(operator_api_key.encode()).hexdigest(),
+            operator_row["id"],
+        )
+
+        # Problemata owner principal. Registered up front with its own key,
+        # because MetaGate has no MCP surface for issuing a key to a principal
+        # created mid-flight. Publishing a Problemata binds this existing
+        # principal to the materialized topology rather than inventing an
+        # identity, which is also how a real deployment would do it.
+        owner_key = _env("PROBLEMATA_OWNER_ID", "principal-topology-demo")
+        owner_subject = _env("PROBLEMATA_OWNER_SUBJECT", "principal-topology-demo-subject")
+        await conn.execute(
+            """
+            INSERT INTO principals (id, tenant_key, principal_key, auth_subject, principal_type, status)
+            VALUES ($1, $2, $3, $4, 'component', 'active')
+            ON CONFLICT (principal_key) DO NOTHING
+            """,
+            uuid4(),
+            tenant_key,
+            owner_key,
+            owner_subject,
+        )
+        owner_row = await conn.fetchrow(
+            "SELECT id FROM principals WHERE principal_key = $1", owner_key
+        )
+        owner_api_key = f"mgk_{secrets.token_urlsafe(32)}"
+        await conn.execute(
+            """
+            INSERT INTO api_keys (id, tenant_key, key_hash, principal_id, name, status)
+            VALUES ($1, $2, $3, $4, 'Problemata Demo Owner Key', 'active')
+            ON CONFLICT (key_hash) DO NOTHING
+            """,
+            uuid4(),
+            tenant_key,
+            hashlib.sha256(owner_api_key.encode()).hexdigest(),
+            owner_row["id"],
+        )
+
         print("\n" + "=" * 72)
         print("PROBLEMATA DEMO SEED COMPLETE")
         print("=" * 72)
@@ -165,6 +232,10 @@ async def main() -> None:
             print(f"  {name}: {config['url']}")
         print("\nAPI Key (save this - shown only once):")
         print(f"  {api_key}")
+        print("\nOperator API Key (admin; publishes Problemata topology):")
+        print(f"  METAGATE_OPERATOR_API_KEY={operator_api_key}")
+        print("\nOwner API Key (component; bootstraps into the published topology):")
+        print(f"  METAGATE_OWNER_API_KEY={owner_api_key}")
         print("\nBootstrap example:")
         print("  curl -X POST http://localhost:8100/mcp ")
         print(f"    -H \"X-API-Key: {api_key}\" ")

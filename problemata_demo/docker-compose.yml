@@ -10,7 +10,11 @@ services:
       POSTGRES_DB: metagate
     volumes:
       - metagate_pg:/var/lib/postgresql/data
+      # Every migration, in order. Mounting only 001 left api_keys without the
+      # created_by column that 002 adds, which the ApiKey model selects on --
+      # so API-key authentication failed against a fresh database.
       - ../../MetaGate/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ../../MetaGate/migrations/002_audit_logging.sql:/docker-entrypoint-initdb.d/002_audit_logging.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U metagate -d metagate"]
       interval: 10s

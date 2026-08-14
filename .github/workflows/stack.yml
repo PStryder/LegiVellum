@@ -119,6 +119,28 @@ jobs:
         working-directory: ${{ env.COMPOSE_DIR }}
         run: python observe_path.py
 
+      # Seeding issues two credentials on purpose: an admin operator that may
+      # publish topology, and a component owner that may only bootstrap into it.
+      - name: Seed MetaGate
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: |
+          seed_output="$(docker compose --profile seed run --rm metagate-seed)"
+          echo "$seed_output" | sed -E 's/mgk_[A-Za-z0-9_-]+/mgk_***/g'
+          operator="$(printf '%s' "$seed_output" | grep -oE 'METAGATE_OPERATOR_API_KEY=mgk_[A-Za-z0-9_-]+' | cut -d= -f2)"
+          owner="$(printf '%s' "$seed_output" | grep -oE 'METAGATE_OWNER_API_KEY=mgk_[A-Za-z0-9_-]+' | cut -d= -f2)"
+          if [ -z "$operator" ] || [ -z "$owner" ]; then
+            echo "Seed did not emit both credentials" >&2
+            exit 1
+          fi
+          echo "::add-mask::$operator"
+          echo "::add-mask::$owner"
+          echo "METAGATE_API_KEY=$operator" >> "$GITHUB_ENV"
+          echo "METAGATE_OWNER_API_KEY=$owner" >> "$GITHUB_ENV"
+
+      - name: Topology path
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python topology_path.py
+
       - name: Diagnostics on failure
         if: failure()
         working-directory: ${{ env.COMPOSE_DIR }}
