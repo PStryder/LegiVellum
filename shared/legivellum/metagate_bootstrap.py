@@ -71,6 +71,25 @@ class BootstrapResult:
     startup_id: Optional[str] = None
 
 
+def _same_endpoint(a: Optional[str], b: Optional[str]) -> bool:
+    """Compare endpoints ignoring a trailing /mcp and trailing slashes.
+
+    Callers append /mcp when invoking, so "http://receiptgate:8000" and
+    "http://receiptgate:8000/mcp" address the same service. Comparing them
+    literally reports a divergence that does not exist, which trains operators
+    to ignore a log line that is supposed to mean something.
+    """
+    def _canonical(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        trimmed = value.rstrip("/")
+        if trimmed.endswith("/mcp"):
+            trimmed = trimmed[: -len("/mcp")]
+        return trimmed.rstrip("/")
+
+    return _canonical(a) == _canonical(b)
+
+
 def endpoint_for_type(services: Any, primitive_type: str) -> Optional[str]:
     """Return the first endpoint whose service declares the given type.
 
@@ -173,7 +192,7 @@ async def bootstrap_from_metagate(
                 if not current:
                     setattr(settings, binding.setting, discovered)
                     applied[binding.setting] = discovered
-                elif current != discovered:
+                elif not _same_endpoint(current, discovered):
                     logger.info(
                         "metagate_bootstrap_endpoint_override setting=%s configured=%s manifest=%s",
                         binding.setting,

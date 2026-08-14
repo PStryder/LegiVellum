@@ -134,3 +134,76 @@ def test_control_service_diagnostics_marks_invalid_edge_error():
 
     assert diagnostics.validation.status == "failed"
     assert any(edge.status == "error" for edge in diagnostics.edges)
+
+
+class TestEndpointOverrides:
+    """endpoint_base alone assumes one gateway host with per-type paths.
+
+    A real mesh addresses each primitive separately, so a Problemata that
+    cannot express that cannot describe the deployment it governs.
+    """
+
+    def _blueprint(self, **kwargs):
+        from legivellum.problemata_control import ProblemataBlueprint
+
+        base = dict(
+            problemata_id="override-test",
+            tenant_id="default",
+            owner_principal="principal-demo",
+            description="d",
+        )
+        base.update(kwargs)
+        return ProblemataBlueprint(**base)
+
+    def _compile(self, blueprint):
+        from legivellum.problemata_control import compile_problemata_blueprint
+
+        return compile_problemata_blueprint(blueprint)
+
+    def test_override_replaces_derived_endpoint(self):
+        spec = self._compile(
+            self._blueprint(endpoints={"receiptgate": "http://receiptgate:8000/mcp"})
+        )
+        assert spec["primitives"]["receiptgate-main"]["endpoint"] == "http://receiptgate:8000/mcp"
+
+    def test_unoverridden_primitives_still_derive(self):
+        spec = self._compile(
+            self._blueprint(
+                endpoint_base="http://gw.example",
+                endpoints={"receiptgate": "http://receiptgate:8000/mcp"},
+            )
+        )
+        assert spec["primitives"]["metagate-main"]["endpoint"] == "http://gw.example/metagate/mcp"
+
+    def test_every_primitive_can_be_overridden(self):
+        spec = self._compile(
+            self._blueprint(
+                endpoints={
+                    "metagate": "http://metagate:8000/mcp",
+                    "receiptgate": "http://receiptgate:8000/mcp",
+                    "depotgate": "http://depotgate:8000/mcp",
+                    "asyncgate": "http://asyncgate:8080/mcp",
+                }
+            )
+        )
+        endpoints = {p["type"]: p["endpoint"] for p in spec["primitives"].values()}
+        assert endpoints["metagate"] == "http://metagate:8000/mcp"
+        assert endpoints["asyncgate"] == "http://asyncgate:8080/mcp"
+
+    def test_no_overrides_preserves_existing_behaviour(self):
+        spec = self._compile(self._blueprint(endpoint_base="http://gw.example"))
+        for primitive in spec["primitives"].values():
+            assert primitive["endpoint"].startswith("http://gw.example/")
+
+    def test_malformed_override_is_refused(self):
+        """A bad override would be published as world-truth to every component."""
+        import pytest
+
+        with pytest.raises(Exception, match="must start with http"):
+            self._blueprint(endpoints={"receiptgate": "receiptgate:8000"})
+
+    def test_override_trailing_slash_is_normalized(self):
+        spec = self._compile(
+            self._blueprint(endpoints={"receiptgate": "http://receiptgate:8000/mcp/"})
+        )
+        assert spec["primitives"]["receiptgate-main"]["endpoint"] == "http://receiptgate:8000/mcp"

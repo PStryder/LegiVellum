@@ -252,3 +252,45 @@ def test_endpoint_lookup_ignores_malformed_entries() -> None:
         "good": {"type": "receiptgate", "endpoint": "http://r/mcp"},
     }
     assert endpoint_for_type(services, "receiptgate") == "http://r/mcp"
+
+
+@pytest.mark.parametrize(
+    "configured,discovered,expected_same",
+    [
+        ("http://r:8000", "http://r:8000/mcp", True),
+        ("http://r:8000/mcp", "http://r:8000", True),
+        ("http://r:8000/", "http://r:8000/mcp/", True),
+        ("http://r:8000", "http://other:8000/mcp", False),
+        ("http://r:8000", "https://r:8000/mcp", False),
+        (None, "http://r:8000", False),
+    ],
+)
+def test_endpoint_equivalence_ignores_mcp_suffix(configured, discovered, expected_same) -> None:
+    """A /mcp suffix is not a divergence; callers append it when invoking."""
+    from legivellum.metagate_bootstrap import _same_endpoint
+
+    assert _same_endpoint(configured, discovered) is expected_same
+
+
+@pytest.mark.asyncio
+async def test_equivalent_endpoint_logs_no_divergence(patch_client, caplog) -> None:
+    patch_client(_ok({"packet": _packet()}))
+    settings = _settings(receiptgate_endpoint="http://receiptgate:8000")
+
+    with caplog.at_level("INFO"):
+        result = await bootstrap_from_metagate(settings, bindings=BINDINGS)
+
+    assert result.succeeded
+    assert "metagate_bootstrap_endpoint_override" not in caplog.text
+    assert settings.receiptgate_endpoint == "http://receiptgate:8000"
+
+
+@pytest.mark.asyncio
+async def test_genuine_divergence_is_still_logged(patch_client, caplog) -> None:
+    patch_client(_ok({"packet": _packet()}))
+    settings = _settings(receiptgate_endpoint="http://somewhere-else:9000")
+
+    with caplog.at_level("INFO"):
+        await bootstrap_from_metagate(settings, bindings=BINDINGS)
+
+    assert "metagate_bootstrap_endpoint_override" in caplog.text

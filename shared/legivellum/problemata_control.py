@@ -58,6 +58,13 @@ class ProblemataBlueprint(BaseModel):
     owner_principal: str = Field(..., min_length=1)
     description: Optional[str] = None
     endpoint_base: str = Field(default="http://localhost")
+    # Per-primitive endpoint overrides, keyed by primitive type
+    # ("receiptgate", "asyncgate", ...). endpoint_base alone derives
+    # {base}/{type}/mcp, which assumes a single gateway host with per-type
+    # paths and cannot describe a mesh where each primitive has its own
+    # hostname -- the common case in compose, Kubernetes, or anywhere services
+    # are addressed individually.
+    endpoints: dict[str, str] = Field(default_factory=dict)
     trust_domain: str = Field(default="default", min_length=1)
     include_asyncgate: bool = True
     include_cognigate: bool = False
@@ -80,6 +87,21 @@ class ProblemataBlueprint(BaseModel):
         if not value.startswith(("http://", "https://")):
             raise ValueError("endpoint_base must start with http:// or https://")
         return value.rstrip("/")
+
+    @field_validator("endpoints")
+    @classmethod
+    def validate_endpoints(cls, value: dict[str, str]) -> dict[str, str]:
+        """Overrides are full endpoints, so they are validated as such.
+
+        A silently malformed override would be published as world-truth and
+        every component bootstrapping into that Problemata would inherit it.
+        """
+        for primitive_type, endpoint in value.items():
+            if not isinstance(endpoint, str) or not endpoint.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"endpoint override for '{primitive_type}' must start with http:// or https://"
+                )
+        return {k: v.rstrip("/") for k, v in value.items()}
 
 
 class ProblemataRecord(BaseModel):
@@ -546,7 +568,9 @@ def compile_problemata_blueprint(blueprint: ProblemataBlueprint) -> dict[str, An
     }
 
     def endpoint(name: str) -> str:
-        return f"{blueprint.endpoint_base}/{name}/mcp"
+        """Resolve a primitive's endpoint: explicit override, else derived."""
+        override = blueprint.endpoints.get(name)
+        return override if override else f"{blueprint.endpoint_base}/{name}/mcp"
 
     primitives: dict[str, dict[str, Any]] = {
         primitive_ids["metagate"]: {

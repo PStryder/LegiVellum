@@ -78,14 +78,20 @@ def main() -> int:
             problemata_id=problemata_id,
             tenant_id="default",
             owner_principal=asyncgate_principal,
-            description="Binds the running AsyncGate to a published topology",
-            # Notional. ProblemataBlueprint derives every primitive's endpoint
-            # as {base}/{type}/mcp, which assumes one gateway host with
-            # per-type paths -- it cannot describe a compose network where each
-            # service has its own hostname. What this path proves is that the
-            # gate resolves *a published manifest*, not that a blueprint can
-            # yet express this stack's real addresses.
-            endpoint_base=_env("PROBLEMATA_MESH_BASE", "http://mesh.internal"),
+            description="Describes this stack and binds the running AsyncGate to it",
+            include_interview=True,
+            # The real in-network addresses of this stack. Per-primitive
+            # overrides exist because endpoint_base alone derives
+            # {base}/{type}/mcp -- one gateway host with per-type paths --
+            # which cannot describe a compose network where every service has
+            # its own hostname.
+            endpoints={
+                "metagate": _env("MESH_METAGATE", "http://metagate:8000/mcp"),
+                "receiptgate": _env("MESH_RECEIPTGATE", "http://receiptgate:8000/mcp"),
+                "depotgate": _env("MESH_DEPOTGATE", "http://depotgate:8000/mcp"),
+                "asyncgate": _env("MESH_ASYNCGATE", "http://asyncgate:8080/mcp"),
+                "interview": _env("MESH_INTERVIEW", "http://interview:8000/mcp"),
+            },
         )
     )
     if record.status is not ProblemataStatus.VALIDATED:
@@ -96,6 +102,22 @@ def main() -> int:
     manifest_key = result["manifest_key"]
     print(f"   manifest : {manifest_key}")
     print(f"   bound to : {result['principal_key']}")
+    print(f"   services : {', '.join(result['services'])}")
+
+    # The manifest must describe the stack that is actually running, not a
+    # placeholder. Assert the addresses the gates really answer on.
+    published = {p["type"]: p["endpoint"] for p in record.spec["primitives"].values()}
+    for primitive_type, expected in (
+        ("receiptgate", "http://receiptgate:8000/mcp"),
+        ("asyncgate", "http://asyncgate:8080/mcp"),
+        ("metagate", "http://metagate:8000/mcp"),
+    ):
+        if published.get(primitive_type) != expected:
+            raise RuntimeError(
+                f"published {primitive_type} endpoint is {published.get(primitive_type)!r}, "
+                f"expected the live address {expected!r}"
+            )
+    print("   endpoints describe the running stack")
 
     # `docker compose restart` reuses the container, so its log keeps every
     # earlier attempt -- including the failed boot from before anything was
