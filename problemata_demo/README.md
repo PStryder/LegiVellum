@@ -55,6 +55,20 @@ python observe_path.py                 # run a task, then observe it
 python observe_path.py --task-id UUID  # observe an existing task
 ```
 
+Plan path — an intent becomes a cognitive plan, the plan mints obligations,
+and CogniGate executes them. Registers CogniGate as DeleGate's worker first,
+so the plan targets a real executor:
+
+```bash
+python plan_path.py
+```
+
+Both DeleGate and CogniGate default to stub providers, so this runs with no
+model and no API key. CogniGate's poller is constructed at startup but only
+starts on demand, so the script calls `cognigate.polling_start` — a cognitive
+worker should not begin consuming obligations merely because its process
+exists.
+
 Topology path — authors a Problemata in the control plane, publishes it to
 MetaGate, and bootstraps a component into the resulting topology. Requires the
 seed, which issues two deliberately separate credentials: an **admin operator**

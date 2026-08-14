@@ -160,6 +160,12 @@ jobs:
         working-directory: ${{ env.COMPOSE_DIR }}
         run: python topology_path.py
 
+      # Registers CogniGate as DeleGate's worker, so the plan targets a real
+      # executor. Both default to stub providers, so this runs with no model.
+      - name: Plan path (intent -> plan -> obligations -> work)
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python plan_path.py
+
       # Adversarial: every probe sends something the canonical specs say MUST
       # be refused, and passes only if the stack refuses it. The other paths
       # prove the happy case; this proves the rules are enforced rather than
