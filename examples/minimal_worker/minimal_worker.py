@@ -59,11 +59,14 @@ def _build_receipt(*, task_id, tenant_id, principal_ai, recipient_ai, phase, sta
     )
     if phase == "accepted":
         base.update(outcome_kind="NA", artifact_location="NA", artifact_pointer="NA", artifact_checksum="NA", artifact_size_bytes=0, artifact_mime="NA")
+        base["body"] = {}
     else:
         base.update(
             outcome_kind="artifact_pointer", artifact_location=artifact.get("location", "NA"), artifact_pointer=pointer,
             artifact_checksum=artifact.get("content_hash", "NA"), artifact_size_bytes=artifact.get("size_bytes", 0), artifact_mime="application/json",
         )
+        # Protocol Golden 7.2: complete must carry artifact_refs or body.result.
+        base["body"] = {"result": {"summary": outcome_text, "artifact_pointer": pointer}}
     return base
 
 

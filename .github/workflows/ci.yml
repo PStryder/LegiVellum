@@ -78,5 +78,8 @@ jobs:
       - name: Mypy (full repo)
         run: python -m mypy --config-file .mypy-ci.ini shared/legivellum
 
+      - name: Validate canonical receipt examples
+        run: python tools/validate_all_examples.py
+
       - name: Run tests
         run: pytest -q --maxfail=1 -m "not e2e and not integration"

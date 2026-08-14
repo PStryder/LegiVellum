@@ -32,6 +32,16 @@
   "escalation_reason": "Testing routing invariant violation",
   "escalation_to": "delegate.correct",
   "retry_requested": false,
+  "body": {
+    "escalation": {
+      "parent_receipt_id": "NA",
+      "parent_obligation_id": "T-INVALID-3",
+      "child_obligation_id": "NA",
+      "from": "delegate.primary",
+      "to": "delegate.correct",
+      "reason": "Testing routing invariant violation"
+    }
+  },
   "created_at": "2026-01-04T18:00:00Z",
   "stored_at": "2026-01-04T18:00:01Z",
   "started_at": null,

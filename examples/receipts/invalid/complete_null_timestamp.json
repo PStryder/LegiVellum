@@ -32,6 +32,12 @@
   "escalation_reason": "NA",
   "escalation_to": "NA",
   "retry_requested": false,
+  "body": {
+    "result": {
+      "summary": "Example completion body.",
+      "outcome": "response_text"
+    }
+  },
   "created_at": "2026-01-04T18:00:00Z",
   "stored_at": "2026-01-04T18:00:01Z",
   "started_at": null,

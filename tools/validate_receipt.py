@@ -2,7 +2,7 @@
 """Validate LegiVellum receipts against the JSON Schema.
 
 Usage:
-  python tools/validate_receipt.py path/to/receipt.json [--schema spec/receipt.schema.v1.json]
+  python tools/validate_receipt.py path/to/receipt.json [--schema docs/canonical/receipt.schema.v1.json]
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def validate_routing_invariant(receipt: dict) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("receipt", type=Path, help="Path to receipt JSON file")
-    ap.add_argument("--schema", type=Path, default=Path("spec/receipt.schema.v1.json"), help="Path to receipt schema JSON")
+    ap.add_argument("--schema", type=Path, default=Path("docs/canonical/receipt.schema.v1.json"), help="Path to receipt schema JSON")
     args = ap.parse_args()
 
     schema = load_json(args.schema)

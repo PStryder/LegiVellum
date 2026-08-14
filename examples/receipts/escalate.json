@@ -32,6 +32,16 @@
   "escalation_reason": "Need a DeleGate with access to repository write operations to proceed.",
   "escalation_to": "delegate.secondary",
   "retry_requested": false,
+  "body": {
+    "escalation": {
+      "parent_receipt_id": "01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+      "parent_obligation_id": "T-01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
+      "child_obligation_id": "T-01HTZQC5D3F0R9S8T7U6V5W4X3",
+      "from": "delegate.primary",
+      "to": "delegate.secondary",
+      "reason": "Need a DeleGate with access to repository write operations to proceed."
+    }
+  },
   "created_at": "2026-01-04T17:05:00Z",
   "stored_at": "2026-01-04T17:05:01Z",
   "started_at": null,
