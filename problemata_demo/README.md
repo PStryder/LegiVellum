@@ -43,6 +43,14 @@ Escalation path (uses lease expiry + fallback worker):
 python escalation_path.py
 ```
 
+Observation path — runs a task, then answers "what happened?" entirely through
+InterView (read-only: ledger, queue, and artifact inventory):
+
+```bash
+python observe_path.py                 # run a task, then observe it
+python observe_path.py --task-id UUID  # observe an existing task
+```
+
 ## Optional CogniGate
 
 CogniGate is behind the `cognigate` profile to avoid requiring an AI key:

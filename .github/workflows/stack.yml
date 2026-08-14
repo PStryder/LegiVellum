@@ -77,6 +77,13 @@ jobs:
           path: ReceiptGate
           fetch-depth: 1
 
+      - name: Checkout InterView
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/InterView
+          path: InterView
+          fetch-depth: 1
+
       # Not started: it sits behind the `cognigate` profile and needs an AI
       # key, and compose does not resolve profiled build contexts. Checked out
       # so `docker compose --profile cognigate` works here when that lands.
@@ -107,6 +114,10 @@ jobs:
       - name: Escalation path
         working-directory: ${{ env.COMPOSE_DIR }}
         run: python escalation_path.py
+
+      - name: Observation path
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python observe_path.py
 
       - name: Diagnostics on failure
         if: failure()

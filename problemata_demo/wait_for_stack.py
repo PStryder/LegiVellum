@@ -30,6 +30,7 @@ SERVICES: dict[str, tuple[str, str]] = {
     "depotgate": ("DEPOTGATE_URL", "http://localhost:8200"),
     "receiptgate": ("RECEIPTGATE_URL", "http://localhost:8300"),
     "asyncgate": ("ASYNCGATE_URL", "http://localhost:8400"),
+    "interview": ("INTERVIEW_URL", "http://localhost:8600"),
 }
 
 

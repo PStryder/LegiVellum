@@ -81,6 +81,32 @@ services:
       - receiptgate_data:/data
     command: ["sh", "-c", "pip install --no-cache-dir /app/receiptgate && receiptgate"]
 
+  # Read-only observation surface. Reads the ledger, polls AsyncGate, and lists
+  # DepotGate artifacts; it never writes. Started after the sources it reads so
+  # its first queries have something to find.
+  interview:
+    image: python:3.11-slim
+    container_name: problemata-interview
+    working_dir: /app/interview
+    environment:
+      INTERVIEW_ALLOW_INSECURE_DEV: "true"
+      INTERVIEW_RECEIPTGATE_URL: http://receiptgate:8000
+      INTERVIEW_ASYNCGATE_URL: http://asyncgate:8080
+      INTERVIEW_DEPOTGATE_URL: http://depotgate:8000
+      INTERVIEW_ASYNCGATE_API_KEY: ${ASYNCGATE_API_KEY:-dev_asyncgate_key}
+    ports:
+      - "8600:8000"
+    volumes:
+      - ../../InterView:/app/interview
+    depends_on:
+      - receiptgate
+      - asyncgate
+      - depotgate
+    command:
+      - sh
+      - -c
+      - pip install --no-cache-dir /app/interview && python -m uvicorn interview.main:app --host 0.0.0.0 --port 8000
+
   asyncgate-db:
     image: postgres:16-alpine
     container_name: problemata-asyncgate-db

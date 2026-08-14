@@ -260,6 +260,62 @@ class ReceiptGateClient:
         return self._mcp_call("receiptgate.search_receipts", arguments)
 
 
+class InterViewClient:
+    """Read-only observation surface.
+
+    InterView never writes. Its tools are suffix-named (`status.receipts.interview`)
+    rather than prefixed like the other primitives -- see docs/canonical/mcp.naming.md.
+    """
+
+    def __init__(self, base_url: str, api_key: str | None = None) -> None:
+        self._http = HttpClient(base_url, api_key=api_key)
+
+    def _mcp_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments},
+        }
+        response = self._http.request_json("POST", "/mcp", payload)
+        if "error" in response:
+            raise RuntimeError(f"InterView MCP error: {response['error']}")
+        result = response.get("result")
+        if result is None:
+            raise RuntimeError(f"InterView MCP returned no result: {response}")
+        return result
+
+    def health(self) -> dict[str, Any]:
+        return self._mcp_call("interview.health", {})
+
+    def status(self, tenant_id: str, task_id: str) -> dict[str, Any]:
+        return self._mcp_call(
+            "status.receipts.interview",
+            {"tenant_id": tenant_id, "task_id": task_id},
+        )
+
+    def search_receipts(self, tenant_id: str, root_task_id: str) -> dict[str, Any]:
+        return self._mcp_call(
+            "search.receipts.interview",
+            {"tenant_id": tenant_id, "root_task_id": root_task_id},
+        )
+
+    def get_receipt(self, tenant_id: str, receipt_id: str) -> dict[str, Any]:
+        return self._mcp_call(
+            "get.receipt.interview",
+            {"tenant_id": tenant_id, "receipt_id": receipt_id},
+        )
+
+    def artifacts(self, tenant_id: str, root_task_id: str) -> dict[str, Any]:
+        return self._mcp_call(
+            "inventory.artifacts.depot.interview",
+            {"tenant_id": tenant_id, "root_task_id": root_task_id},
+        )
+
+    def queue(self, tenant_id: str) -> dict[str, Any]:
+        return self._mcp_call("queue.async.interview", {"tenant_id": tenant_id})
+
+
 def wait_for(predicate, *, timeout_seconds: float = 30.0, interval_seconds: float = 2.0) -> None:
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
