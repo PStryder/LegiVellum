@@ -2,7 +2,7 @@
 import os
 import sys
 from pathlib import Path
-from importlib.util import module_from_spec, spec_from_file_location
+from importlib.util import find_spec, module_from_spec, spec_from_file_location
 
 import pytest
 import pytest_asyncio
@@ -129,6 +129,9 @@ def tenant_id():
 
 @pytest.fixture(scope="session")
 def memorygate_mcp():
+    if find_spec("mcp") is None:
+        pytest.skip("Integration tests require the 'mcp' package (install dev dependencies).")
+
     root = _repo_root()
     module = _load_module(
         "memorygate_mcp",

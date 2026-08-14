@@ -12,6 +12,9 @@ pytest-timeout>=2.1.0
 # HTTP testing
 httpx>=0.24.0
 respx>=0.20.0  # Mock HTTP requests in tests
+mcp>=1.0.0  # Required by integration fixtures loading component MCP servers
+fastapi>=0.109.0
+uvicorn>=0.27.0
 
 # Code quality
 black>=23.0.0

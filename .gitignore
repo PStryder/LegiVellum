@@ -94,6 +94,9 @@ Desktop.ini
 *.backup
 *~
 
+# Local agent notes (Eris)
+notes/
+
 # Test coverage
 .coverage
 coverage/
