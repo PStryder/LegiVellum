@@ -137,7 +137,15 @@ services:
       DELEGATE_API_KEY: ${DELEGATE_API_KEY:-dev_delegate_key}
       DELEGATE_ALLOW_INSECURE_DEV: "true"
       DELEGATE_RECEIPTGATE_URL: http://receiptgate:8000
+      # DeleGate refuses to emit receipts without a key even when the ledger
+      # runs open, which is right for production and needs supplying here.
+      DELEGATE_RECEIPTGATE_API_KEY: ${DELEGATE_RECEIPTGATE_API_KEY:-dev_receiptgate_key}
       DELEGATE_METAGATE_ENDPOINT: http://metagate:8000
+      # DeleGate mints the obligations its plans imply. Minting is within its
+      # authority as a planning authority; it never executes them.
+      DELEGATE_ASYNCGATE_URL: http://asyncgate:8080
+      DELEGATE_ASYNCGATE_API_KEY: ${ASYNCGATE_API_KEY:-dev_asyncgate_key}
+      DELEGATE_AI_PROVIDER: ${DELEGATE_AI_PROVIDER:-stub}
     ports:
       - "8700:8000"
     depends_on:
