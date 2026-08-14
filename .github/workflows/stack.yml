@@ -160,6 +160,14 @@ jobs:
         working-directory: ${{ env.COMPOSE_DIR }}
         run: python topology_path.py
 
+      # Adversarial: every probe sends something the canonical specs say MUST
+      # be refused, and passes only if the stack refuses it. The other paths
+      # prove the happy case; this proves the rules are enforced rather than
+      # merely documented.
+      - name: Invariant probe
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python invariant_probe.py
+
       # Runs last: it restarts AsyncGate, so anything depending on the original
       # container should already have run.
       - name: Bind path (gate bootstraps from a published Problemata)
