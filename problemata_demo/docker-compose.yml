@@ -139,11 +139,15 @@ services:
       ASYNCGATE_ALLOW_INSECURE_DEV: "true"
       ASYNCGATE_RECEIPT_MODE: receiptgate_integrated
       ASYNCGATE_RECEIPTGATE_URL: http://receiptgate:8000
-      # AsyncGate asks MetaGate for its world-truth on startup. It has no
-      # binding here yet, so this exercises the path that matters most: a
-      # bootstrap authority must never be able to prevent a component from
-      # starting. Expect a warning and a healthy service.
+      # AsyncGate asks MetaGate for its world-truth on startup. Before the seed
+      # runs there is no principal to authenticate as, so the first boot
+      # exercises the property that matters most -- a bootstrap authority must
+      # never prevent a component from starting. After seeding and publishing,
+      # bind_asyncgate_path.py restarts it and it bootstraps for real.
+      # The key is fixed rather than generated because AsyncGate starts before
+      # the seed and both sides need the same value.
       ASYNCGATE_METAGATE_ENDPOINT: http://metagate:8000
+      ASYNCGATE_METAGATE_API_KEY: ${PROBLEMATA_ASYNCGATE_API_KEY:-mgk_demo_asyncgate_bootstrap_key}
       ASYNCGATE_RECEIPTGATE_TENANT_ID: ${PROBLEMATA_TENANT_KEY:-default}
       ASYNCGATE_RATE_LIMIT_ENABLED: "false"
       ASYNCGATE_ESCALATION_ENABLED: "true"

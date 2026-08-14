@@ -29,6 +29,13 @@ from .problemata_control import (
 )
 from .problemata_control_ui import create_app as create_problemata_control_ui_app
 from .problemata_publish import MetaGatePublisher, ProblemataPublishError
+from .metagate_bootstrap import (
+    BootstrapResult,
+    EndpointBinding,
+    acknowledge_startup,
+    bootstrap_from_metagate,
+    endpoint_for_type,
+)
 
 __all__ = [
     "Receipt",
@@ -59,4 +66,9 @@ __all__ = [
     "create_problemata_control_ui_app",
     "MetaGatePublisher",
     "ProblemataPublishError",
+    "BootstrapResult",
+    "EndpointBinding",
+    "acknowledge_startup",
+    "bootstrap_from_metagate",
+    "endpoint_for_type",
 ]

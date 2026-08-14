@@ -243,6 +243,38 @@ async def main() -> None:
             owner_row["id"],
         )
 
+        # AsyncGate's own identity, so it can bootstrap its world-truth rather
+        # than reading peers from environment variables. The key is taken from
+        # the environment rather than generated, because AsyncGate starts before
+        # this seed runs and compose has to hand both sides the same value.
+        asyncgate_principal = _env("PROBLEMATA_ASYNCGATE_PRINCIPAL", "principal-asyncgate")
+        asyncgate_api_key = _env("PROBLEMATA_ASYNCGATE_API_KEY", "mgk_demo_asyncgate_bootstrap_key")
+        await conn.execute(
+            """
+            INSERT INTO principals (id, tenant_key, principal_key, auth_subject, principal_type, status)
+            VALUES ($1, $2, $3, $4, 'component', 'active')
+            ON CONFLICT (principal_key) DO NOTHING
+            """,
+            uuid4(),
+            tenant_key,
+            asyncgate_principal,
+            f"{asyncgate_principal}-subject",
+        )
+        asyncgate_row = await conn.fetchrow(
+            "SELECT id FROM principals WHERE principal_key = $1", asyncgate_principal
+        )
+        await conn.execute(
+            """
+            INSERT INTO api_keys (id, tenant_key, key_hash, principal_id, name, status)
+            VALUES ($1, $2, $3, $4, 'AsyncGate Bootstrap Key', 'active')
+            ON CONFLICT (key_hash) DO NOTHING
+            """,
+            uuid4(),
+            tenant_key,
+            hashlib.sha256(asyncgate_api_key.encode()).hexdigest(),
+            asyncgate_row["id"],
+        )
+
         print("\n" + "=" * 72)
         print("PROBLEMATA DEMO SEED COMPLETE")
         print("=" * 72)

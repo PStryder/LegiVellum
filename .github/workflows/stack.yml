@@ -146,6 +146,12 @@ jobs:
         working-directory: ${{ env.COMPOSE_DIR }}
         run: python topology_path.py
 
+      # Runs last: it restarts AsyncGate, so anything depending on the original
+      # container should already have run.
+      - name: Bind path (gate bootstraps from a published Problemata)
+        working-directory: ${{ env.COMPOSE_DIR }}
+        run: python bind_asyncgate_path.py
+
       - name: Diagnostics on failure
         if: failure()
         working-directory: ${{ env.COMPOSE_DIR }}

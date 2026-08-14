@@ -65,6 +65,19 @@ export METAGATE_OWNER_API_KEY=mgk_...  # owner (component)
 python topology_path.py
 ```
 
+Bind path — publishes a Problemata owned by AsyncGate's principal, restarts
+AsyncGate, and asserts the running gate took its world-truth from MetaGate
+rather than from environment variables. Needs the operator key only:
+
+```bash
+export METAGATE_API_KEY=mgk_...        # operator (admin)
+python bind_asyncgate_path.py
+```
+
+AsyncGate keeps `ASYNCGATE_RECEIPTGATE_URL` configured, so explicit
+configuration still wins and a bootstrap regression cannot break the other
+paths. The proof is that the gate reached MetaGate and resolved the manifest.
+
 ## Optional CogniGate
 
 CogniGate is behind the `cognigate` profile to avoid requiring an AI key:
