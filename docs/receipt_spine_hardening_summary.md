@@ -17,7 +17,7 @@ Finalize the Receipt v1 protocol to ensure:
 
 ## Deliverables Completed
 
-### 1. Schema (`spec/receipt.schema.v1.json`)
+### 1. Schema (`docs/canonical/receipt.schema.v1.json`)
 
 **Enhanced Conditional Validations:**
 - ✅ `phase=accepted`: Added `task_summary != "TBD"` validation
@@ -30,7 +30,7 @@ Finalize the Receipt v1 protocol to ensure:
 
 **Note:** Routing invariant (`recipient_ai == escalation_to` for escalate phase) is enforced at application level (validator tool) since JSON Schema cannot easily express field equality.
 
-### 2. Rules Document (`spec/receipt.rules.md`)
+### 2. Rules Document (`docs/canonical/receipt.rules.md`)
 
 **Complete Rewrite with RFC 2119 Normative Language:**
 - ✅ Obligation semantics clearly defined (what creates/ends obligations)
@@ -73,7 +73,7 @@ Finalize the Receipt v1 protocol to ensure:
 - ✅ Runs validator on all .json files in `examples/receipts/`
 - ✅ Clear pass/fail reporting
 
-### 5. Indexes (`spec/receipt.indexes.sql`)
+### 5. Indexes (`docs/canonical/receipt.indexes.sql`)
 
 **Verified Complete:**
 - ✅ All 8 indexes present and documented
@@ -133,8 +133,8 @@ INVALID: 1 error(s)
 ## Files Modified/Created
 
 **Modified:**
-- `spec/receipt.schema.v1.json` - Added conditional validations
-- `spec/receipt.rules.md` - Complete rewrite with RFC 2119 language
+- `docs/canonical/receipt.schema.v1.json` - Added conditional validations
+- `docs/canonical/receipt.rules.md` - Complete rewrite with RFC 2119 language
 - `tools/validate_receipt.py` - Added routing invariant check
 
 **Created:**

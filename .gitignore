@@ -107,3 +107,6 @@ coverage/
 local/
 scratch/
 temp/
+
+# Resolver output, not a source artifact; sibling repos ignore it too.
+uv.lock

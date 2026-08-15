@@ -99,6 +99,10 @@ python scripts/generate_jwt.py test-subject-001
 - `metagate.admin_manifests` - Manage manifests
 - `metagate.admin_bindings` - Manage bindings
 - `metagate.admin_secret_refs` - Manage secret references
+- `metagate.admin_api_keys` - Issue, list, and revoke API keys. A key's plaintext is returned once at issue and never stored; revocation marks status rather than deleting the row, so an audit trail survives.
+
+**Topology:**
+- `metagate.instantiate_problemata` - Instantiate a validated Problemata into a live topology. Refuses anything whose `validation.status` is not `passed`: MetaGate describes topology, it does not repair it.
 
 ### Health
 - `metagate.health` - Health check / root info

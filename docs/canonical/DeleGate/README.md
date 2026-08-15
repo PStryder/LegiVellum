@@ -101,18 +101,38 @@ Trust tiers:
 
 ## MCP Tool Surface
 
-- `create_delegation_plan` - Create plan from intent
-- `validate_plan` - Validate plan structure
-- `get_plan` - Get a plan by ID
-- `analyze_intent` - Analyze intent without creating plan
-- `register_worker` - Register worker with capabilities
-- `search_workers` - Search workers by capability
-- `match_workers` - Match workers to intent
-- `list_workers` - List all registered workers
-- `worker_status` - Get worker status by ID
-- `delete_worker` - Remove a worker from the registry
-- `stats` - Registry and planning statistics
-- `cache_clear` - Clear registry cache (admin)
+Names are namespaced `delegate.*` per `mcp.naming.md`. This list matches what
+`tools/list` reports.
+
+- `delegate.create_delegation_plan` - Create plan from intent
+- `delegate.validate_plan` - Validate plan structure
+- `delegate.get_plan` - Get a plan by ID
+- `delegate.list_plans` - List stored plans
+- `delegate.analyze_intent` - Analyze intent without creating plan
+- `delegate.register_worker` - Register worker with capabilities
+- `delegate.search_workers` - Search workers by capability
+- `delegate.match_workers` - Match workers to intent
+- `delegate.list_workers` - List all registered workers
+- `delegate.worker_status` - Get worker status by ID
+- `delegate.delete_worker` - Remove a worker from the registry
+- `delegate.health` - Health check
+- `delegate.stats` - Registry and planning statistics
+- `delegate.cache_clear` - Clear registry cache (admin)
+
+## Cognition
+
+Decomposition is cognitive, and DeleGate does not hold cognition of its own.
+With `DELEGATE_AI_PROVIDER=cognigate` it calls `cognigate.plan`, which runs
+CogniGate's planning phase and stops. CogniGate returns a plan document;
+DeleGate remains the only component here that mints obligations from it, so the
+authority boundary is unchanged.
+
+`DELEGATE_COGNITION_SCOPES` bounds which classified scopes consult cognition,
+and `DELEGATE_PLANNING_FALLBACK` decides what happens when it is unreachable.
+The default is `escalate`: a heuristic plan is structurally indistinguishable
+from a reasoned one, so substituting it silently would claim thinking that did
+not happen, and **Plan OR Escalation (cannot plan)** already makes refusal a
+legitimate output. See the DeleGate README for the full variable table.
 
 ## Testing
 

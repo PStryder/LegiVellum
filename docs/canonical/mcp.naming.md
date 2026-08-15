@@ -67,3 +67,41 @@ If a repo-level README conflicts with this document:
 2. `docs/canonical/worker.contract.md`
 3. service-local README
 
+## 7. Known Deviations
+
+Recorded so this document does not imply compliance that does not exist. Unlike
+the MemoryGate `memory_*` exception in §3, these are **not** sanctioned — they
+are open discrepancies awaiting a decision.
+
+### InterView
+
+InterView advertises seven of its eight tools in a `<verb>.<domain>.interview`
+form rather than `interview.*`:
+
+| Advertised | §1 form would be |
+|------------|------------------|
+| `status.receipts.interview` | `interview.status_receipts` |
+| `search.receipts.interview` | `interview.search_receipts` |
+| `get.receipt.interview` | `interview.get_receipt` |
+| `health.async.interview` | `interview.health_async` |
+| `queue.async.interview` | `interview.queue_async` |
+| `inventory.artifacts.depot.interview` | `interview.inventory_artifacts_depot` |
+| `global.ledger.receipts` | `interview.global_ledger_receipts` |
+| `interview.health` | *(already compliant)* |
+
+The form is deliberate and documented in InterView's own README as a "Surface
+Convention" with a verb taxonomy, so this is a genuine design disagreement
+rather than an oversight. Under §6 this document outranks that README, which
+means the code is currently non-compliant.
+
+Resolving it requires a choice, not a doc edit:
+
+- Rename the tools to `interview.*`, which breaks any existing caller and the
+  `InterView/tests/test_mcp_snapshot.py` contract snapshot that pins the current names; or
+- Grant InterView a permitted exception in §3 alongside MemoryGate's, and state
+  why observation surfaces name themselves differently from action surfaces.
+
+Note that `global.ledger.receipts` carries no service segment at all, so it is
+not merely differently ordered — it is unnamespaced, which §1 forbids outright
+regardless of which convention wins.
+

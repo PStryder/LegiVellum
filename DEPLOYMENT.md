@@ -1,29 +1,50 @@
 # LegiVellum Deployment Guide
 
-This guide covers deploying the full LegiVellum primitive stack. The LegiVellum repo contains MemoryGate, AsyncGate, and DeleGate. Other primitives live in sibling repos (ReceiptGate, MetaGate, DepotGate, CogniGate, InterView).
+This guide covers deploying the full LegiVellum primitive stack.
+
+Every primitive lives in its own repository, checked out beside this one:
+
+```
+LV_Stack/
+├── LegiVellum/     ← this repo: canonical docs, shared package, demo stack
+├── AsyncGate/      ├── CogniGate/    ├── DeleGate/     ├── DepotGate/
+├── InterroGate/    ├── InterView/    ├── MemoryGate/   ├── MetaGate/
+└── ReceiptGate/
+```
+
+The LegiVellum repo itself ships no primitive. It carries the canonical
+contracts under `docs/canonical/`, the shared package under `shared/legivellum/`
+(MetaGate bootstrap, Problemata publishing and validation), and the runnable
+demo stack under `problemata_demo/`.
 
 V1 note: this stack is explicitly single-tenant. Set one tenant ID and one API key per primitive, and use the same tenant ID across the stack. Multi-tenant isolation is planned; the configuration already keeps tenant IDs explicit to ease the upgrade.
 
 ## Recommended Deployment Order
 
-1. ReceiptGate (or MemoryGate profile acting as ReceiptGate)
-2. MetaGate
+Ordered by dependency: each entry can reach everything above it.
+
+1. ReceiptGate (or MemoryGate profile acting as ReceiptGate) — the ledger is a
+   leaf; everything calls it and it calls no other primitive
+2. MetaGate — describe-only bootstrap authority
 3. DepotGate
 4. MemoryGate (if separate from ReceiptGate)
 5. AsyncGate
-6. DeleGate
-7. CogniGate (workers)
-8. InterView (read-only introspection)
+6. CogniGate (workers) — before DeleGate, which sources cognition from it when
+   `DELEGATE_AI_PROVIDER=cognigate`
+7. DeleGate
+8. InterroGate (admission control)
+9. InterView (read-only introspection)
 
 ## Local Development (Docker Compose)
 
-The runnable stack lives in `problemata_demo/`, which builds the primitives
-from their own repositories (`../AsyncGate`, `../MetaGate`, `../DepotGate`,
-`../CogniGate`) and runs ReceiptGate alongside them.
+The runnable stack lives in `problemata_demo/`, which builds all eight services
+from their sibling repositories.
 
 ```bash
 cd problemata_demo
 docker compose up -d --build
+
+python wait_for_stack.py     # blocks until all eight report healthy
 
 docker compose ps
 docker compose logs -f
@@ -31,13 +52,38 @@ docker compose down -v
 ```
 
 Service URLs (default):
-- MetaGate MCP endpoint: http://localhost:8100/mcp
-- DepotGate MCP endpoint: http://localhost:8200/mcp
-- ReceiptGate MCP endpoint: http://localhost:8300/mcp
-- AsyncGate MCP endpoint: http://localhost:8400/mcp
 
-Verify the stack with `python golden_path.py` and `python escalation_path.py`
-from that directory.
+| Service | MCP endpoint |
+|---------|--------------|
+| MetaGate | http://localhost:8100/mcp |
+| DepotGate | http://localhost:8200/mcp |
+| ReceiptGate | http://localhost:8300/mcp |
+| AsyncGate | http://localhost:8400/mcp |
+| CogniGate | http://localhost:8500/mcp |
+| InterView | http://localhost:8600/mcp |
+| DeleGate | http://localhost:8700/mcp |
+| InterroGate | http://localhost:8800/mcp |
+
+### Verifying the stack
+
+Eight demo paths, each exercising a different claim. They are the same ones the
+`Stack` CI workflow runs, in this order:
+
+```bash
+python golden_path.py         # task -> lease -> work -> artifact -> receipt
+python escalation_path.py     # responsibility transfers, recipient_ai == escalation_to
+python observe_path.py        # InterView observes without mutating
+docker compose --profile seed run --rm metagate-seed   # issues operator + owner keys
+python topology_path.py       # publish and instantiate a Problemata
+python plan_path.py           # intent -> cognition -> plan -> minted obligations -> work
+python invariant_probe.py     # the ledger refuses receipts that break its invariants
+python bind_asyncgate_path.py # a gate bootstraps from a published Problemata
+```
+
+`topology_path.py` and `bind_asyncgate_path.py` need the credentials the seed
+step emits — export `METAGATE_API_KEY` (operator) and `METAGATE_OWNER_API_KEY`
+(component owner) from its output first. The seed runs *inside* the compose
+network, so run it via `docker compose`, not as a host-side script.
 
 All inter-gate calls are MCP JSON-RPC over HTTP. Any REST endpoints are non-contract and may be removed.
 
@@ -57,10 +103,10 @@ fly postgres create --name legivellum-db --region iad
 
 Use the database connection string for `DATABASE_URL` (or `RECEIPTGATE_DATABASE_URL` for ReceiptGate).
 
-### MemoryGate (LegiVellum repo)
+### MemoryGate (MemoryGate repo)
 
 ```bash
-cd components/memorygate
+cd ../MemoryGate
 fly launch --name legivellum-memorygate --no-deploy
 fly secrets set DATABASE_URL="postgresql+asyncpg://..."
 fly secrets set LEGIVELLUM_API_KEY="your-production-key"
@@ -70,10 +116,10 @@ fly secrets set DELEGATE_URL="https://legivellum-delegate.fly.dev"
 fly deploy
 ```
 
-### AsyncGate (LegiVellum repo)
+### AsyncGate (AsyncGate repo)
 
 ```bash
-cd components/asyncgate
+cd ../AsyncGate
 fly launch --name legivellum-asyncgate --no-deploy
 fly secrets set DATABASE_URL="postgresql+asyncpg://..."
 fly secrets set MEMORYGATE_URL="https://legivellum-memorygate.fly.dev"
@@ -82,10 +128,10 @@ fly secrets set LEGIVELLUM_TENANT_ID="your-tenant"
 fly deploy
 ```
 
-### DeleGate (LegiVellum repo)
+### DeleGate (DeleGate repo)
 
 ```bash
-cd components/delegate
+cd ../DeleGate
 fly launch --name legivellum-delegate --no-deploy
 fly secrets set DATABASE_URL="postgresql+asyncpg://..."
 fly secrets set MEMORYGATE_URL="https://legivellum-memorygate.fly.dev"
@@ -161,7 +207,7 @@ fly deploy
 
 ## Environment Variables
 
-### Common (LegiVellum components)
+### Common (all primitives)
 
 | Variable | Description | Default |
 |----------|-------------|---------|

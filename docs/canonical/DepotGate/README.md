@@ -39,20 +39,26 @@ python -m depotgate.main
 
 Transport: MCP only (no secondary facade in the canonical contract).
 
-**Tools:**
-- `stage_artifact` - Stage an artifact in DepotGate
-- `list_staged_artifacts` - List artifacts staged for a task
-- `get_artifact` - Get artifact metadata by ID
-- `declare_deliverable` - Declare a deliverable contract
-- `check_closure` - Check if closure requirements are met
-- `ship` - Ship a deliverable (verifies closure first)
-- `purge` - Purge staged artifacts
+**Tools:** namespaced `depotgate.*` per `mcp.naming.md`.
+
+- `depotgate.stage_artifact` - Stage an artifact in DepotGate
+- `depotgate.list_staged_artifacts` - List artifacts staged for a task
+- `depotgate.get_artifact` - Get artifact metadata by ID
+- `depotgate.declare_deliverable` - Declare a deliverable contract
+- `depotgate.check_closure` - Check if closure requirements are met
+- `depotgate.ship` - Ship a deliverable (verifies closure first)
+- `depotgate.purge` - Purge staged artifacts
+- `depotgate.get_deliverable` - Fetch a deliverable by ID
+- `depotgate.health` - Health check / service info
+
+Unprefixed names are accepted as legacy aliases and mapped onto these, but are
+not advertised by `tools/list`.
 
 ## MCP Usage (Tool Call Payload)
 
 ```json
 {
-  "tool": "stage_artifact",
+  "tool": "depotgate.stage_artifact",
   "arguments": {
     "root_task_id": "agent-task-1",
     "content_base64": "<base64-encoded-bytes>",

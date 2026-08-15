@@ -180,6 +180,36 @@ Example (structured snapshot):
 }
 ```
 
+### Planning
+- `cognigate.plan` - Decompose an intent into an ordered plan and return it
+
+This runs the planning phase and stops. Nothing is executed, no tools are
+called, no artifacts are written, and no lease is taken — the caller is asking
+a question, not claiming leased work.
+
+It exists for DeleGate, which holds the planning authority but no cognition of
+its own. DeleGate asks what an intent decomposes into and then mints the
+obligations itself, so the authority boundary is unchanged: CogniGate returns a
+plan *document* and never mints anything.
+
+`cognigate.execute_job` is deliberately not the tool for this. It runs the full
+plan → execute → output pipeline, which would have CogniGate performing the
+work while DeleGate believed it was still deciding what the work is, against
+DeleGate's stated invariant that it never executes. Its result also returns
+through `Receipt.summary`, bounded at 1000 characters, so a real plan would
+truncate.
+
+Arguments:
+- `intent` (required): the intent to decompose
+- `task_type` (optional): default task type for steps
+- `profile` (optional): instruction profile to plan under
+- `context` (optional): additional planning context
+
+The response carries `is_stub` and `model`. When the stub provider answered,
+`is_stub` is `true` and `model` is `stub/echo` rather than the configured model
+name — a caller cannot inspect this process to find out whether reasoning
+happened, so it is reported.
+
 ### Job Execution (Standalone)
 - `cognigate.execute_job` - Execute job synchronously
 - `cognigate.submit_job` - Submit a job for background execution
