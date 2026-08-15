@@ -156,7 +156,7 @@ Transport: MCP only (no secondary facade in the canonical contract).
 
 **Validation Steps:**
 1. Extract `tenant_id` from MCP auth context (JWT or API key)
-2. Validate against `spec/receipt.schema.v1.json`
+2. Validate against `docs/canonical/receipt.schema.v1.json`
 3. Enforce application-level constraints:
    - Routing invariant: `recipient_ai == escalation_to` when `phase=escalate`
    - Field size limits (inputs <64KB, metadata <16KB, etc.)
@@ -339,7 +339,7 @@ See `/spec/receipt.indexes.sql` for complete index definitions.
 
 ### Schema Validation
 
-All receipts MUST validate against `/spec/receipt.schema.v1.json`.
+All receipts MUST validate against `docs/canonical/receipt.schema.v1.json`.
 
 Validation performed on POST:
 1. JSON Schema validation
@@ -462,7 +462,7 @@ Enforced at API layer before database insertion.
 
 ## References
 
-- `/spec/receipt.schema.v1.json` - Receipt JSON Schema
+- `docs/canonical/receipt.schema.v1.json` - Receipt JSON Schema
 - `/spec/receipt.rules.md` - Protocol rules and semantics
 - `/spec/receipt.indexes.sql` - Database indexes
 - `/schema/receipts.sql` - PostgreSQL DDL

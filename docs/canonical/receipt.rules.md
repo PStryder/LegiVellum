@@ -233,7 +233,7 @@ Implementations MAY enforce these limits at the API layer before database insert
 ## 9. Validation Requirements
 
 **Schema Validation:**
-- All receipts MUST validate against `spec/receipt.schema.v1.json`
+- All receipts MUST validate against `docs/canonical/receipt.schema.v1.json`
 - Schema validation MUST be performed before database insertion
 
 **Application-Level Validation:**

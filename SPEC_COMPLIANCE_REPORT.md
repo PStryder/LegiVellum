@@ -1,3 +1,8 @@
+> **LEGACY NOTE (2026-08-15).** Point-in-time compliance snapshot, kept as a
+> record rather than as current guidance. Paths referencing `components/` or
+> `spec/` predate the move of the primitives into sibling repositories and of
+> the specs into `docs/canonical/`.
+
 # LegiVellum Specification Compliance Report
 
 This report documents conflicts and discrepancies between the standalone project implementations and the LegiVellum specification.

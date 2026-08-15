@@ -1,3 +1,11 @@
+> **LEGACY NOTE (2026-08-15).** This is a point-in-time review from 2026-01-05,
+> kept as a record of what was found then. It is not current guidance.
+>
+> Its file paths predate two structural changes: the `spec/` directory moved to
+> `docs/canonical/`, and the primitives moved out of `components/` into their own
+> sibling repositories. References like `spec/receipt.schema.v1.json` or
+> `memorygate/src/mcp_server.py` describe a layout that no longer exists.
+
 # LegiVellum Code Review
 **Reviewer:** Kee (Claude Sonnet 4.5)  
 **Date:** 2026-01-05  
