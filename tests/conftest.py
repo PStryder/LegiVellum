@@ -122,11 +122,31 @@ async def test_session(test_engine, test_db_setup) -> AsyncGenerator[AsyncSessio
         await session.rollback()  # Rollback after each test
 
 
+# Fixture names that mean "this test talks to the database".
+_DB_FIXTURES = frozenset({"test_session", "test_engine", "test_db_setup"})
+
+
 @pytest_asyncio.fixture(autouse=True)
-async def cleanup_database(test_session):
-    """Clean database between tests"""
+async def cleanup_database(request):
+    """Clean the database between tests that actually use one.
+
+    This previously depended on `test_session` directly while being autouse,
+    so every test in the repository transitively required Postgres. With no
+    database present the session-scoped engine fixture called `pytest.skip`,
+    and the *entire* suite skipped — including tests that touch nothing but
+    pure Python. A skipped suite reports green, so protocol regressions could
+    not fail CI.
+
+    Engaging only when the test requested a database fixture keeps the cleanup
+    behaviour for integration tests and lets protocol tests run anywhere.
+    """
+    if not (_DB_FIXTURES & set(request.fixturenames)):
+        yield
+        return
+
+    test_session = request.getfixturevalue("test_session")
     yield
-    
+
     # Clean all tables after each test
     await test_session.execute(text("DELETE FROM receipts"))
     await test_session.execute(text("DELETE FROM tasks"))
@@ -343,3 +363,43 @@ class TestHelpers:
 def helpers():
     """Provide test helper methods"""
     return TestHelpers()
+
+
+# =============================================================================
+# Canonical receipt fixtures (Phase 0)
+# =============================================================================
+# Sourced from examples/ rather than hand-built, so a schema change that
+# invalidates the shipped examples fails here instead of passing against a
+# fixture that was quietly updated to match.
+
+import json as _json
+from pathlib import Path as _Path
+
+_EXAMPLES = _Path(__file__).resolve().parents[1] / "examples" / "receipts"
+
+
+def _load_example(name: str) -> dict:
+    return _json.loads((_EXAMPLES / name).read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def canonical_good_receipt() -> dict:
+    """A canonical `accepted` receipt that must validate."""
+    return _load_example("accepted.json")
+
+
+@pytest.fixture(params=sorted(p.name for p in _EXAMPLES.glob("*.json")))
+def canonical_valid_example(request) -> dict:
+    """Every shipped valid example, one per test."""
+    return _load_example(request.param)
+
+
+@pytest.fixture(params=sorted(p.name for p in (_EXAMPLES / "invalid").glob("*.json")))
+def canonical_invalid_example(request) -> dict:
+    """Every shipped negative example, one per test.
+
+    These existed but were asserted nowhere: the example validator globbed
+    `examples/receipts/*.json` non-recursively, so nothing ever checked that
+    the schema *rejects* anything. A change that loosened the schema passed CI.
+    """
+    return _load_example(f"invalid/{request.param}")

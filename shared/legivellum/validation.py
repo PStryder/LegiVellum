@@ -7,14 +7,16 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from .models import Receipt, ReceiptCreate, Phase
 
-try:
-    import jsonschema
-    JSONSCHEMA_AVAILABLE = True
-except ImportError:
-    JSONSCHEMA_AVAILABLE = False
-    print("Warning: jsonschema not installed. JSON Schema validation disabled.")
+# Imported unguarded on purpose. This was previously wrapped in
+# `except ImportError: JSONSCHEMA_AVAILABLE = False`, which turned a broken
+# install into a validator that silently accepted everything -- the same
+# fail-open shape the schema-path handling above exists to prevent. A component
+# that cannot validate receipts must fail to start, loudly, naming the
+# dependency.
+import jsonschema
+
+from .models import Phase, Receipt, ReceiptCreate
 
 
 class ValidationError(Exception):
@@ -187,56 +189,96 @@ def validate_receipt(data: dict[str, Any], *, validate_schema: bool = True) -> l
 
     # Routing invariant
     errors.extend(validate_routing_invariant(data))
-    
-    # JSON Schema validation (if available)
-    if validate_schema and JSONSCHEMA_AVAILABLE:
+
+    # Canonical JSON Schema. No availability gate: jsonschema is a hard
+    # dependency and a missing schema raises rather than passing everything.
+    if validate_schema:
         errors.extend(validate_json_schema(data))
 
     return errors
 
 
+SCHEMA_FILENAME = "receipt.schema.v1.json"
+SCHEMA_DIR_ENV = "LEGIVELLUM_SCHEMA_DIR"
+
+_schema_cache: dict[str, Any] | None = None
+
+
+def schema_path() -> Path:
+    """Locate the canonical receipt schema, package copy first.
+
+    Resolution order, and why:
+
+    1. ``LEGIVELLUM_SCHEMA_DIR`` — an operator override, so a deployment can
+       point at a pinned schema without reinstalling.
+    2. ``legivellum/schemas/`` inside the installed package. This is the one
+       that works in a container, where no repository checkout exists.
+    3. ``docs/canonical/`` relative to a source checkout, for development.
+
+    The previous implementation looked only for ``spec/receipt.schema.v1.json``
+    — a directory renamed to ``docs/canonical/`` — and returned no errors when
+    it was missing. Every phase rule in receipt.rules.md was therefore
+    unenforced in every deployment while passing in a source checkout.
+    """
+    override = os.environ.get(SCHEMA_DIR_ENV)
+    if override:
+        candidate = Path(override) / SCHEMA_FILENAME
+        if candidate.exists():
+            return candidate
+        raise RuntimeError(
+            f"{SCHEMA_DIR_ENV} is set to {override!r} but {candidate} does not exist"
+        )
+
+    packaged = Path(__file__).resolve().parent / "schemas" / SCHEMA_FILENAME
+    if packaged.exists():
+        return packaged
+
+    # Source checkout: shared/legivellum/ -> shared/ -> repo root.
+    checkout = Path(__file__).resolve().parents[2] / "docs" / "canonical" / SCHEMA_FILENAME
+    if checkout.exists():
+        return checkout
+
+    raise RuntimeError(
+        f"Canonical receipt schema {SCHEMA_FILENAME} not found. Looked in the "
+        f"installed package at {packaged} and the source checkout at {checkout}. "
+        f"A validator that cannot find its rules is misconfigured, not permissive; "
+        f"refusing to treat every receipt as valid."
+    )
+
+
+def load_schema() -> dict[str, Any]:
+    """Load and cache the canonical receipt schema."""
+    global _schema_cache
+    if _schema_cache is None:
+        with open(schema_path(), encoding="utf-8") as handle:
+            _schema_cache = json.load(handle)
+    return _schema_cache
+
+
 def validate_json_schema(data: dict[str, Any]) -> list[ValidationError]:
+    """Validate a receipt payload against the canonical JSON Schema.
+
+    Returns a list of errors; an empty list means the payload conformed.
+
+    This function does not fail open. If the schema cannot be located,
+    ``schema_path()`` raises rather than returning "no errors" — a validator
+    that reports success because it could not find its rules is worse than one
+    that is absent, because callers believe validation happened.
     """
-    Validate against canonical JSON Schema file.
-    Returns list of validation errors.
-    """
-    if not JSONSCHEMA_AVAILABLE:
-        return []
-    
-    errors = []
-    
+    errors: list[ValidationError] = []
+    schema = load_schema()
+
     try:
-        # Find schema file (relative to this module)
-        module_dir = Path(__file__).parent
-        schema_path = module_dir.parent.parent / "spec" / "receipt.schema.v1.json"
-        
-        # Try alternate path if not found
-        if not schema_path.exists():
-            schema_path = Path.cwd() / "spec" / "receipt.schema.v1.json"
-        
-        if not schema_path.exists():
-            # Schema file not found - warn but don't fail
-            return []
-        
-        with open(schema_path) as f:
-            schema = json.load(f)
-        
-        # Validate against schema
         jsonschema.validate(data, schema)
-        
-    except jsonschema.ValidationError as e:
-        errors.append(ValidationError(
-            message=f"JSON Schema validation failed: {e.message}",
-            field=".".join(str(p) for p in e.path) if e.path else "unknown",
-            constraint="json_schema"
-        ))
-    except FileNotFoundError:
-        # Schema file not found - warn but don't fail validation
-        pass
-    except Exception as e:
-        # Other errors - log but don't fail
-        print(f"Warning: JSON Schema validation error: {e}")
-    
+    except jsonschema.ValidationError as exc:
+        errors.append(
+            ValidationError(
+                message=f"JSON Schema validation failed: {exc.message}",
+                field=".".join(str(p) for p in exc.path) if exc.path else "unknown",
+                constraint="json_schema",
+            )
+        )
+
     return errors
 
 

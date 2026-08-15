@@ -69,9 +69,13 @@ services:
     command: ["sh", "-c", "pip install --no-cache-dir asyncpg && python /seed_metagate.py"]
 
   receiptgate:
-    image: python:3.11-slim
+    # Built from its own Dockerfile rather than pip-installed into a bare
+    # python:3.11-slim. ReceiptGate had no Dockerfile, so the workflow written
+    # to catch container bugs could not catch the ledger's own.
+    build:
+      context: ../..
+      dockerfile: ReceiptGate/Dockerfile
     container_name: problemata-receiptgate
-    working_dir: /app/receiptgate
     environment:
       RECEIPTGATE_DATABASE_URL: sqlite:////data/receiptgate.db
       RECEIPTGATE_ALLOW_INSECURE_DEV: "true"
@@ -81,9 +85,7 @@ services:
     ports:
       - "8300:8000"
     volumes:
-      - ../../ReceiptGate:/app/receiptgate
       - receiptgate_data:/data
-    command: ["sh", "-c", "pip install --no-cache-dir /app/receiptgate && receiptgate"]
 
   # Read-only observation surface. Reads the ledger, polls AsyncGate, and lists
   # DepotGate artifacts; it never writes. Started after the sources it reads so
@@ -223,8 +225,12 @@ services:
 
   asyncgate:
     build:
-      context: ../../AsyncGate
-      dockerfile: Dockerfile
+      # Stack root, so the image can install the sibling protocol package.
+      # Without it, `legivellum` was resolved by walking parent directories
+      # for a source tree that does not exist in an image, and receipt
+      # validation silently degraded to posting unvalidated dictionaries.
+      context: ../..
+      dockerfile: AsyncGate/Dockerfile
     container_name: problemata-asyncgate
     environment:
       ASYNCGATE_ENV: development

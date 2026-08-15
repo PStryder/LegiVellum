@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Callable, Iterable, Optional
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 VALIDATOR_VERSION = "0.1.0"
 
 
-class ValidationLayer(str, Enum):
+class ValidationLayer(StrEnum):
     """Validation layers per canonical contract."""
 
     STRUCTURAL = "structural"
@@ -34,7 +35,7 @@ class ProblemataValidationError(BaseModel):
     layer: ValidationLayer
     path: str
     message: str
-    hint: Optional[str] = None
+    hint: str | None = None
 
 
 class ProblemataValidationResult(BaseModel):
@@ -42,21 +43,21 @@ class ProblemataValidationResult(BaseModel):
 
     status: str = Field(default="passed", pattern="^(passed|failed)$")
     errors: list[ProblemataValidationError] = Field(default_factory=list)
-    spec_version: Optional[str] = None
+    spec_version: str | None = None
     validator_version: str = VALIDATOR_VERSION
-    validated_by: Optional[str] = None
-    spec_hash: Optional[str] = None
-    report_pointer: Optional[str] = None
+    validated_by: str | None = None
+    spec_hash: str | None = None
+    report_pointer: str | None = None
 
 
 @dataclass
 class ValidationContext:
     """Context hooks for external resolution."""
 
-    secret_resolver: Optional[Callable[[str], bool]] = None
-    profile_resolver: Optional[Callable[[str], bool]] = None
-    validated_by: Optional[str] = None
-    report_pointer: Optional[str] = None
+    secret_resolver: Callable[[str], bool] | None = None
+    profile_resolver: Callable[[str], bool] | None = None
+    validated_by: str | None = None
+    report_pointer: str | None = None
 
 
 REQUIRED_PRIMITIVE_TYPES = {"metagate", "receiptgate", "depotgate"}
@@ -165,8 +166,8 @@ def validate_problemata_spec(
 
 def _result(
     errors: list[ProblemataValidationError],
-    spec_version: Optional[str],
-    spec_hash: Optional[str],
+    spec_version: str | None,
+    spec_hash: str | None,
     context: ValidationContext,
 ) -> ProblemataValidationResult:
     status = "failed" if errors else "passed"
@@ -181,14 +182,14 @@ def _result(
     )
 
 
-def _get_spec_version(spec: dict[str, Any]) -> Optional[str]:
+def _get_spec_version(spec: dict[str, Any]) -> str | None:
     meta = spec.get("problemata")
     if isinstance(meta, dict):
         return meta.get("version")
     return None
 
 
-def _hash_spec(spec: dict[str, Any]) -> Optional[str]:
+def _hash_spec(spec: dict[str, Any]) -> str | None:
     try:
         payload = json.dumps(spec, sort_keys=True, separators=(",", ":"))
     except TypeError:

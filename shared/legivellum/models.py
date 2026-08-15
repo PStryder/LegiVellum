@@ -5,20 +5,22 @@ Pydantic models for the LegiVellum receipt protocol.
 Based on docs/canonical/receipt.rules.md and docs/canonical/receipt.schema.v1.json.
 """
 from datetime import datetime
-from enum import Enum
-from typing import Any, Optional
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-import ulid
+from enum import StrEnum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .ulid import new_ulid
 
 
-class Phase(str, Enum):
+class Phase(StrEnum):
     """Receipt lifecycle phases"""
     ACCEPTED = "accepted"
     COMPLETE = "complete"
     ESCALATE = "escalate"
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     """Task completion status"""
     NA = "NA"
     SUCCESS = "success"
@@ -26,7 +28,7 @@ class Status(str, Enum):
     CANCELED = "canceled"
 
 
-class OutcomeKind(str, Enum):
+class OutcomeKind(StrEnum):
     """Type of task outcome"""
     NA = "NA"
     NONE = "none"
@@ -35,7 +37,7 @@ class OutcomeKind(str, Enum):
     MIXED = "mixed"
 
 
-class EscalationClass(str, Enum):
+class EscalationClass(StrEnum):
     """Reason category for escalation"""
     NA = "NA"
     OWNER = "owner"
@@ -47,8 +49,8 @@ class EscalationClass(str, Enum):
 
 
 def generate_receipt_id() -> str:
-    """Generate a new ULID for receipt_id"""
-    return str(ulid.new())
+    """Generate a new ULID for receipt_id."""
+    return new_ulid()
 
 
 class Receipt(BaseModel):
@@ -132,12 +134,12 @@ class Receipt(BaseModel):
     )
 
     # Timestamps
-    created_at: Optional[datetime] = Field(default=None, description="Issuer clock timestamp")
-    stored_at: Optional[datetime] = Field(default=None, description="MemoryGate clock (set on store)")
-    started_at: Optional[datetime] = Field(default=None, description="Execution start time")
-    completed_at: Optional[datetime] = Field(default=None, description="Execution completion time")
-    read_at: Optional[datetime] = Field(default=None, description="Inbox read time")
-    archived_at: Optional[datetime] = Field(default=None, description="Archive time")
+    created_at: datetime | None = Field(default=None, description="Issuer clock timestamp")
+    stored_at: datetime | None = Field(default=None, description="MemoryGate clock (set on store)")
+    started_at: datetime | None = Field(default=None, description="Execution start time")
+    completed_at: datetime | None = Field(default=None, description="Execution completion time")
+    read_at: datetime | None = Field(default=None, description="Inbox read time")
+    archived_at: datetime | None = Field(default=None, description="Archive time")
 
     # Freeform metadata
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
@@ -220,7 +222,7 @@ class ReceiptCreate(BaseModel):
     tenant_id is intentionally excluded - server assigns from auth.
     """
     schema_version: str = Field(default="1.0")
-    receipt_id: Optional[str] = Field(default=None, description="Client-generated ULID or auto-generated")
+    receipt_id: str | None = Field(default=None, description="Client-generated ULID or auto-generated")
 
     # Task correlation
     task_id: str
@@ -269,9 +271,9 @@ class ReceiptCreate(BaseModel):
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
 
     # Timestamps
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
     # Metadata
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -297,15 +299,15 @@ class InboxResponse(BaseModel):
 class BootstrapRequest(BaseModel):
     """Request for session bootstrap"""
     agent_name: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
 
 
 class BootstrapConfig(BaseModel):
     """Configuration returned in bootstrap"""
     receipt_schema_version: str = "1.0"
-    memorygate_url: Optional[str] = None
-    asyncgate_url: Optional[str] = None
-    delegate_url: Optional[str] = None
+    memorygate_url: str | None = None
+    asyncgate_url: str | None = None
+    delegate_url: str | None = None
     capabilities: list[str] = Field(default_factory=lambda: ["receipts"])
 
 
@@ -324,7 +326,7 @@ class BootstrapResponse(BaseModel):
     """Full bootstrap response"""
     tenant_id: str
     agent_name: str
-    session_id: Optional[str]
+    session_id: str | None
     config: BootstrapConfig
     inbox: BootstrapInbox
     recent_context: BootstrapContext

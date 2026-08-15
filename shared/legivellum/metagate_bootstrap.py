@@ -30,8 +30,9 @@ the mesh disagrees so the divergence is visible.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence
+from typing import Any
 
 import httpx
 
@@ -64,14 +65,14 @@ class BootstrapResult:
 
     attempted: bool
     succeeded: bool
-    reason: Optional[str] = None
-    manifest: Optional[str] = None
+    reason: str | None = None
+    manifest: str | None = None
     services: dict[str, Any] = field(default_factory=dict)
     applied: dict[str, str] = field(default_factory=dict)
-    startup_id: Optional[str] = None
+    startup_id: str | None = None
 
 
-def _same_endpoint(a: Optional[str], b: Optional[str]) -> bool:
+def _same_endpoint(a: str | None, b: str | None) -> bool:
     """Compare endpoints ignoring a trailing /mcp and trailing slashes.
 
     Callers append /mcp when invoking, so "http://receiptgate:8000" and
@@ -79,18 +80,17 @@ def _same_endpoint(a: Optional[str], b: Optional[str]) -> bool:
     literally reports a divergence that does not exist, which trains operators
     to ignore a log line that is supposed to mean something.
     """
-    def _canonical(value: Optional[str]) -> str:
+    def _canonical(value: str | None) -> str:
         if not value:
             return ""
         trimmed = value.rstrip("/")
-        if trimmed.endswith("/mcp"):
-            trimmed = trimmed[: -len("/mcp")]
+        trimmed = trimmed.removesuffix("/mcp")
         return trimmed.rstrip("/")
 
     return _canonical(a) == _canonical(b)
 
 
-def endpoint_for_type(services: Any, primitive_type: str) -> Optional[str]:
+def endpoint_for_type(services: Any, primitive_type: str) -> str | None:
     """Return the first endpoint whose service declares the given type.
 
     Tolerates a malformed services block rather than raising: a bootstrap packet
@@ -116,7 +116,7 @@ async def _mcp_call(
     tool: str,
     arguments: dict[str, Any],
     *,
-    api_key: Optional[str],
+    api_key: str | None,
 ) -> dict[str, Any]:
     url = endpoint if endpoint.endswith("/mcp") else f"{endpoint.rstrip('/')}/mcp"
     headers = {"Content-Type": "application/json"}
@@ -146,7 +146,7 @@ async def bootstrap_from_metagate(
     settings: Any,
     *,
     bindings: Sequence[EndpointBinding],
-    component_key: Optional[str] = None,
+    component_key: str | None = None,
 ) -> BootstrapResult:
     """Resolve peer endpoints from MetaGate, filling only what is unset.
 

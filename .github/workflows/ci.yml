@@ -73,10 +73,12 @@ jobs:
         run: python -m compileall -q shared/legivellum
 
       - name: Ruff (full repo)
-        run: ruff check shared/legivellum --select E9,F63,F7,F82
+        # The declared [tool.ruff.lint] selection, not a hand-picked subset.
+        run: ruff check shared/legivellum
 
       - name: Mypy (full repo)
-        run: python -m mypy --config-file .mypy-ci.ini shared/legivellum
+        # The declared [tool.mypy] config; the override file is deleted.
+        run: python -m mypy shared/legivellum
 
       - name: Validate canonical receipt examples
         run: python tools/validate_all_examples.py

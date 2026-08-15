@@ -4,10 +4,10 @@ LegiVellum Database Utilities
 Shared database connection and query utilities for PostgreSQL.
 """
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -22,7 +22,6 @@ def get_database_url() -> str:
 
 class Base(DeclarativeBase):
     """SQLAlchemy declarative base"""
-    pass
 
 
 def create_engine(database_url: str = None):

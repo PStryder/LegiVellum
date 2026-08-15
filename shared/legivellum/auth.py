@@ -8,7 +8,6 @@ MVP: API key auth with local-dev bypass modes for integration velocity.
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 from fastapi import HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader
@@ -75,7 +74,7 @@ def _iter_env_tenant_api_keys() -> dict[str, str]:
     return dynamic_map
 
 
-def _tenant_from_key_pattern(api_key: str) -> Optional[str]:
+def _tenant_from_key_pattern(api_key: str) -> str | None:
     """Allow dynamic test/dev key formats without static registration."""
     for prefix in ("dev-key-", "test-key-"):
         if api_key.startswith(prefix):
@@ -85,7 +84,7 @@ def _tenant_from_key_pattern(api_key: str) -> Optional[str]:
     return None
 
 
-def get_tenant_from_api_key(api_key: str) -> Optional[str]:
+def get_tenant_from_api_key(api_key: str) -> str | None:
     """Map API key to tenant_id."""
     if not api_key:
         return None
@@ -111,7 +110,7 @@ def get_tenant_from_api_key(api_key: str) -> Optional[str]:
     return _iter_env_tenant_api_keys().get(normalized_key)
 
 
-def get_tenant_from_bearer(auth_value: str) -> Optional[str]:
+def get_tenant_from_bearer(auth_value: str) -> str | None:
     """
     Extract tenant_id from Bearer token.
     MVP: Treats Bearer token as API key.
@@ -129,9 +128,9 @@ def get_tenant_from_bearer(auth_value: str) -> Optional[str]:
 
 def _resolve_tenant_from_headers(
     *,
-    api_key: Optional[str],
-    authorization: Optional[str],
-) -> Optional[str]:
+    api_key: str | None,
+    authorization: str | None,
+) -> str | None:
     if api_key:
         tenant_id = get_tenant_from_api_key(api_key)
         if tenant_id:
@@ -145,7 +144,7 @@ def _resolve_tenant_from_headers(
     return None
 
 
-def _is_local_request(request: Optional[Request]) -> bool:
+def _is_local_request(request: Request | None) -> bool:
     if request is None:
         return False
 
@@ -163,7 +162,7 @@ def _is_local_request(request: Optional[Request]) -> bool:
     return any(host.strip().lower() in LOCALHOST_HOSTS for host in hosts if host)
 
 
-def _should_bypass_auth(request: Optional[Request]) -> bool:
+def _should_bypass_auth(request: Request | None) -> bool:
     mode = get_auth_mode()
     if mode in {AUTH_MODE_OPTIONAL, AUTH_MODE_DISABLED}:
         return True
@@ -173,8 +172,8 @@ def _should_bypass_auth(request: Optional[Request]) -> bool:
 
 
 async def get_current_tenant(
-    api_key: Optional[str] = Security(api_key_header),
-    authorization: Optional[str] = Security(auth_header),
+    api_key: str | None = Security(api_key_header),
+    authorization: str | None = Security(auth_header),
     request: Request = None,
 ) -> str:
     """
@@ -202,10 +201,10 @@ async def get_current_tenant(
 
 
 async def get_optional_tenant(
-    api_key: Optional[str] = Security(api_key_header),
-    authorization: Optional[str] = Security(auth_header),
+    api_key: str | None = Security(api_key_header),
+    authorization: str | None = Security(auth_header),
     request: Request = None,
-) -> Optional[str]:
+) -> str | None:
     """
     Optional tenant extraction.
     Returns tenant_id when valid auth exists, or default tenant if bypass mode applies.

@@ -16,13 +16,13 @@ from pydantic import BaseModel, Field
 from .auth import get_current_tenant
 from .problemata_control import (
     AsyncProblemataControlService,
-    create_default_postgres_problemata_service,
     InMemoryProblemataRepository,
+    PostgresProblemataRepository,
     ProblemataBlueprint,
     ProblemataControlService,
     ProblemataDiagnosticsResult,
-    PostgresProblemataRepository,
     ProblemataRecord,
+    create_default_postgres_problemata_service,
 )
 from .problemata_validation import ProblemataValidationResult
 

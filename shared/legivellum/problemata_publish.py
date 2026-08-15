@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any
 
 from .problemata_control import ProblemataRecord, ProblemataStatus
 
@@ -32,8 +32,8 @@ class MetaGatePublisher:
         self,
         endpoint: str,
         *,
-        api_key: Optional[str] = None,
-        bearer_token: Optional[str] = None,
+        api_key: str | None = None,
+        bearer_token: str | None = None,
         api_key_header: str = "X-API-Key",
         timeout_seconds: float = 30.0,
     ) -> None:
@@ -87,8 +87,8 @@ class MetaGatePublisher:
         record: ProblemataRecord,
         *,
         deployment_key: str = "default",
-        tenant_key: Optional[str] = None,
-        auth_subject: Optional[str] = None,
+        tenant_key: str | None = None,
+        auth_subject: str | None = None,
     ) -> dict[str, Any]:
         """Materialize a registered Problemata as MetaGate world-truth.
 

@@ -15,10 +15,11 @@ import hashlib
 import os
 import re
 import threading
-from datetime import datetime, timezone
-from enum import Enum
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping, Optional, Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import bindparam, text
@@ -26,7 +27,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from .database import create_engine, get_database_url
-
 from .problemata_validation import (
     ProblemataValidationResult,
     ValidationContext,
@@ -34,14 +34,14 @@ from .problemata_validation import (
 )
 
 
-class ProblemataStatus(str, Enum):
+class ProblemataStatus(StrEnum):
     """Lifecycle state tracked by the control service."""
 
     VALIDATED = "validated"
     REJECTED = "rejected"
 
 
-class ProblemataDiagnosticsStatus(str, Enum):
+class ProblemataDiagnosticsStatus(StrEnum):
     """Diagnostic severity for topology edges."""
 
     OK = "ok"
@@ -56,7 +56,7 @@ class ProblemataBlueprint(BaseModel):
     version: str = Field(default="0.1.0", min_length=1)
     tenant_id: str = Field(..., min_length=1)
     owner_principal: str = Field(..., min_length=1)
-    description: Optional[str] = None
+    description: str | None = None
     endpoint_base: str = Field(default="http://localhost")
     # Per-primitive endpoint overrides, keyed by primitive type
     # ("receiptgate", "asyncgate", ...). endpoint_base alone derives
@@ -112,7 +112,7 @@ class ProblemataRecord(BaseModel):
     status: ProblemataStatus
     source: str
     created_at: datetime
-    spec_hash: Optional[str] = None
+    spec_hash: str | None = None
     validation: ProblemataValidationResult
     spec: dict[str, Any]
 
@@ -130,11 +130,11 @@ class ProblemataEdgeDiagnostic(BaseModel):
     """Edge-level topology diagnostic information."""
 
     index: int
-    from_id: Optional[str] = None
-    to_id: Optional[str] = None
-    purpose: Optional[str] = None
-    protocol: Optional[str] = None
-    trust_domain: Optional[str] = None
+    from_id: str | None = None
+    to_id: str | None = None
+    purpose: str | None = None
+    protocol: str | None = None
+    trust_domain: str | None = None
     status: ProblemataDiagnosticsStatus
     messages: list[str] = Field(default_factory=list)
 
@@ -154,7 +154,7 @@ class ProblemataRepository(Protocol):
     def upsert(self, record: ProblemataRecord) -> ProblemataRecord:
         ...
 
-    def get(self, problemata_id: str) -> Optional[ProblemataRecord]:
+    def get(self, problemata_id: str) -> ProblemataRecord | None:
         ...
 
     def list(self) -> list[ProblemataRecord]:
@@ -176,7 +176,7 @@ class InMemoryProblemataRepository:
             self._records_by_id[record.problemata_id] = record
             return record
 
-    def get(self, problemata_id: str) -> Optional[ProblemataRecord]:
+    def get(self, problemata_id: str) -> ProblemataRecord | None:
         with self._lock:
             record = self._records_by_id.get(problemata_id)
             return copy.deepcopy(record) if record else None
@@ -192,7 +192,7 @@ class ProblemataControlService:
     def __init__(
         self,
         *,
-        repository: Optional[ProblemataRepository] = None,
+        repository: ProblemataRepository | None = None,
         validated_by: str = "legivellum.control-plane",
     ) -> None:
         self._repository = repository or InMemoryProblemataRepository()
@@ -226,7 +226,7 @@ class ProblemataControlService:
         spec = self.preview_from_blueprint(blueprint)
         return self.register_spec(spec, source="blueprint")
 
-    def get(self, problemata_id: str) -> Optional[ProblemataRecord]:
+    def get(self, problemata_id: str) -> ProblemataRecord | None:
         return self._repository.get(problemata_id)
 
     def list(self) -> list[ProblemataRecord]:
@@ -244,7 +244,7 @@ class AsyncProblemataRepository(Protocol):
     async def upsert(self, record: ProblemataRecord) -> ProblemataRecord:
         ...
 
-    async def get(self, problemata_id: str) -> Optional[ProblemataRecord]:
+    async def get(self, problemata_id: str) -> ProblemataRecord | None:
         ...
 
     async def list(self) -> list[ProblemataRecord]:
@@ -286,7 +286,7 @@ class AsyncProblemataControlService:
         spec = self.preview_from_blueprint(blueprint)
         return await self.register_spec(spec, source="blueprint")
 
-    async def get(self, problemata_id: str) -> Optional[ProblemataRecord]:
+    async def get(self, problemata_id: str) -> ProblemataRecord | None:
         return await self._repository.get(problemata_id)
 
     async def list(self) -> list[ProblemataRecord]:
@@ -303,16 +303,16 @@ class PostgresProblemataRepository:
     def __init__(
         self,
         *,
-        database_url: Optional[str] = None,
+        database_url: str | None = None,
         auto_migrate: bool = True,
-        migrations_dir: Optional[Path] = None,
-        engine: Optional[AsyncEngine] = None,
+        migrations_dir: Path | None = None,
+        engine: AsyncEngine | None = None,
     ) -> None:
         self._database_url = database_url or get_database_url()
         self._auto_migrate = auto_migrate
         self._migrations_dir = migrations_dir
         self._engine = engine
-        self._session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+        self._session_factory: async_sessionmaker[AsyncSession] | None = None
         self._owns_engine = engine is None
 
     async def startup(self) -> None:
@@ -388,7 +388,7 @@ class PostgresProblemataRepository:
             "status": record.status.value,
             "source": record.source,
             "created_at": record.created_at,
-            "updated_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(UTC),
             "spec_hash": record.spec_hash,
             "validation": record.validation.model_dump(mode="json"),
             "spec": record.spec,
@@ -399,7 +399,7 @@ class PostgresProblemataRepository:
             await session.commit()
         return _record_from_mapping(row)
 
-    async def get(self, problemata_id: str) -> Optional[ProblemataRecord]:
+    async def get(self, problemata_id: str) -> ProblemataRecord | None:
         await self._ensure_ready()
         assert self._session_factory is not None
         query = text(
@@ -461,7 +461,7 @@ def resolve_problemata_migrations_dir() -> Path:
 async def apply_problemata_migrations(
     engine: AsyncEngine,
     *,
-    migrations_dir: Optional[Path] = None,
+    migrations_dir: Path | None = None,
 ) -> None:
     """Apply SQL migrations for Problemata registry table."""
     resolved_dir = Path(migrations_dir) if migrations_dir else resolve_problemata_migrations_dir()
@@ -529,8 +529,8 @@ async def apply_problemata_migrations(
 
 def create_default_postgres_problemata_service(
     *,
-    database_url: Optional[str] = None,
-    auto_migrate: Optional[bool] = None,
+    database_url: str | None = None,
+    auto_migrate: bool | None = None,
 ) -> tuple[AsyncProblemataControlService, PostgresProblemataRepository]:
     """Create default async control service configured for Postgres persistence."""
     resolved_auto_migrate = auto_migrate
@@ -792,7 +792,7 @@ def _build_problemata_record(
         version=version,
         status=status,
         source=source,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
         spec_hash=validation.spec_hash,
         validation=validation,
         spec=copy.deepcopy(spec),
