@@ -146,13 +146,26 @@ services:
       DELEGATE_ASYNCGATE_URL: http://asyncgate:8080
       DELEGATE_ASYNCGATE_API_KEY: ${ASYNCGATE_API_KEY:-dev_asyncgate_key}
       DELEGATE_ASYNCGATE_TENANT_ID: ${PROBLEMATA_ASYNCGATE_TENANT:-00000000-0000-0000-0000-000000000000}
-      DELEGATE_AI_PROVIDER: ${DELEGATE_AI_PROVIDER:-stub}
+      # Cognition comes from CogniGate, the primitive that owns it, rather than
+      # DeleGate holding a second AI client. CogniGate itself defaults to its
+      # stub provider here, so the whole chain still runs with no model and no
+      # API key -- what is being exercised is the wiring, not the reasoning.
+      DELEGATE_AI_PROVIDER: ${DELEGATE_AI_PROVIDER:-cognigate}
+      DELEGATE_COGNIGATE_ENDPOINT: http://cognigate:8000
+      DELEGATE_COGNITION_SCOPES: ${DELEGATE_COGNITION_SCOPES:-all}
+      # The demo asserts a plan is produced, so it cannot also be the place
+      # that proves escalation-on-outage; failure injection covers that.
+      DELEGATE_PLANNING_FALLBACK: ${DELEGATE_PLANNING_FALLBACK:-heuristic}
     ports:
       - "8700:8000"
     depends_on:
       delegate-db:
         condition: service_healthy
       receiptgate:
+        condition: service_started
+      # DeleGate sources its cognition here. No cycle: CogniGate depends on
+      # AsyncGate, ReceiptGate and DepotGate, never on DeleGate.
+      cognigate:
         condition: service_started
     volumes:
       # The shared MetaGate bootstrap client is resolved from a sibling
