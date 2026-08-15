@@ -171,3 +171,32 @@ def bind_identity(actor: Principal, claimed: dict[str, Any]) -> None:
             f"receipt claims tenant_id={claimed_tenant!r} but the authenticated "
             f"principal is scoped to {actor.visibility!r}",
         )
+
+
+def may_act_on_behalf(role: str) -> bool:
+    """Whether this role may propose transitions for another principal."""
+    defined = roles()
+    if role not in defined:
+        raise AuthorityModelError(f"unknown role {role!r}")
+    return bool(defined[role].get("may_act_on_behalf", False))
+
+
+def resolve_transition_actor(actor: Principal, receipt: dict) -> str:
+    """Which principal is performing this transition.
+
+    Distinguishes identity #5 (who performed it) from #6 (which service emitted
+    the protocol operation). AsyncGate proposes ACCEPT for a claiming worker, so
+    the emitter and the actor are different principals by design -- and the
+    custodian check has to run against the actor, or every completion is
+    refused because a worker's obligation is not held by AsyncGate.
+
+    Only roles marked `may_act_on_behalf` get this. A worker cannot claim to be
+    acting for someone else, which is what keeps it a delegation rather than a
+    bypass.
+    """
+    if not may_act_on_behalf(actor.role):
+        return actor.id
+    on_behalf_of = receipt.get("from_principal")
+    if on_behalf_of and on_behalf_of not in ("NA", "TBD"):
+        return str(on_behalf_of)
+    return actor.id

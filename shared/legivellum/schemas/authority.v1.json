@@ -3,7 +3,6 @@
   "version": "1.0",
   "title": "LegiVellum principal and authority model v1",
   "description": "The identities the protocol distinguishes, where each one lives, and which transitions each role may propose. ReceiptGate loads this and evaluates it; it is not a description of what ReceiptGate does. Receipts keep their four principal fields unchanged -- the richer model lives in the obligation and custody projections, and every projection field is reconstructible from the immutable ledger so the projection is never a second source of truth.",
-
   "identities": [
     {
       "role": "authorizer_principal",
@@ -18,8 +17,9 @@
       "question": "Who is the outcome owed to?",
       "scope": "obligation",
       "stable": true,
-      "derived_from": "receipt.for_principal on the ACCEPT receipt",
-      "storage": "obligations projection"
+      "derived_from": "receipt.from_principal on the ACCEPT receipt",
+      "storage": "obligations projection",
+      "note": "The requester is both who authorized the obligation and who the outcome is owed back to. The canonical schema has one field for the asking party, so these two questions share a source; they remain separate questions because a delegation chain can separate them later."
     },
     {
       "role": "visibility_principal",
@@ -35,9 +35,9 @@
       "question": "Who currently holds responsibility?",
       "scope": "custody",
       "stable": false,
-      "derived_from": "receipt.recipient_ai on the ACCEPT receipt, then receipt.escalation_to on each committed transfer",
+      "derived_from": "receipt.for_principal on the ACCEPT receipt, then receipt.escalation_to on each committed transfer",
       "storage": "custody projection",
-      "note": "Distinct from recipient_ai as an inbox routing key. Conflating them is why a completion could close an obligation its issuer never held."
+      "note": "for_principal is the canonical schema's 'Intended executor (taskee)' -- the party that owes the work. Not recipient_ai, which the schema defines as the inbox owner for a single receipt: routing, not responsibility. They coincide on an ACCEPT and diverge on every completion reported back to the requester, which is why conflating them refused every completion in testing."
     },
     {
       "role": "transition_actor",
@@ -57,60 +57,108 @@
       "storage": "receipt"
     }
   ],
-
   "roles": {
     "principal": {
       "description": "An external actor that may authorize work.",
-      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+      "may_propose": [
+        "ACCEPT",
+        "COMPLETE",
+        "ESCALATE"
+      ],
+      "may_act_on_behalf": false
     },
     "delegate": {
       "description": "A planning authority. May mint obligations.",
-      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+      "may_propose": [
+        "ACCEPT",
+        "COMPLETE",
+        "ESCALATE"
+      ],
+      "may_act_on_behalf": true
     },
     "worker": {
       "description": "Executes leased work. May take and discharge custody but may not authorize new obligations for others.",
-      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+      "may_propose": [
+        "ACCEPT",
+        "COMPLETE",
+        "ESCALATE"
+      ],
+      "may_act_on_behalf": false
     },
     "service": {
       "description": "An infrastructure component acting on its own behalf.",
-      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+      "may_propose": [
+        "ACCEPT",
+        "COMPLETE",
+        "ESCALATE"
+      ],
+      "may_act_on_behalf": true
     },
     "observer": {
       "description": "Read-only. May observe within its visibility scope and may propose nothing.",
-      "may_propose": []
+      "may_propose": [],
+      "may_act_on_behalf": false
     }
   },
-
   "rules": [
     {
       "id": "custodian-only-terminal",
       "statement": "COMPLETE and ESCALATE may be proposed only by the current custodian of the obligation.",
-      "applies_to": ["COMPLETE", "ESCALATE"],
+      "applies_to": [
+        "COMPLETE",
+        "ESCALATE"
+      ],
       "check": "actor_is_current_custodian"
     },
     {
       "id": "recover-not-by-custodian",
       "statement": "RECOVER reclaims an obligation whose custodian is absent; it is proposed by another party and is only legal from OVERDUE.",
-      "applies_to": ["RECOVER"],
+      "applies_to": [
+        "RECOVER"
+      ],
       "check": "obligation_is_overdue"
     },
     {
       "id": "observer-proposes-nothing",
       "statement": "An observer role may never propose a governance transition, regardless of credential.",
-      "applies_to": ["ACCEPT", "COMPLETE", "ESCALATE", "RECOVER"],
+      "applies_to": [
+        "ACCEPT",
+        "COMPLETE",
+        "ESCALATE",
+        "RECOVER"
+      ],
       "check": "role_may_propose"
     },
     {
       "id": "visibility-scoped-reads",
       "statement": "A principal may observe an obligation only when its authenticated visibility scope matches the obligation's visibility_principal.",
-      "applies_to": ["OBSERVE"],
+      "applies_to": [
+        "OBSERVE"
+      ],
       "check": "visibility_matches"
     },
     {
       "id": "server-derived-identity",
       "statement": "transition_actor, service_emitter and visibility_principal are bound from authenticated context and any conflicting caller-supplied value is rejected rather than honoured.",
-      "applies_to": ["ACCEPT", "COMPLETE", "ESCALATE", "RECOVER"],
+      "applies_to": [
+        "ACCEPT",
+        "COMPLETE",
+        "ESCALATE",
+        "RECOVER"
+      ],
       "check": "identity_bound_to_credential"
+    },
+    {
+      "id": "service-acts-on-behalf",
+      "statement": "A service or delegate may propose a transition on behalf of the principal named by the receipt's from_principal; the custodian check is then evaluated against that principal rather than the emitting service. A worker or principal role may only act as itself.",
+      "applies_to": [
+        "ACCEPT",
+        "COMPLETE",
+        "ESCALATE",
+        "RECOVER"
+      ],
+      "check": "transition_actor_resolution",
+      "note": "AsyncGate proposes ACCEPT for a claiming worker, so the emitting service and the custodian are different principals by design. Without this the custodian check compares a worker's obligation against AsyncGate's identity and refuses every completion. It is a delegation, not a bypass: only roles marked may_act_on_behalf can do it, and the ledger records both identities."
     }
   ]
 }

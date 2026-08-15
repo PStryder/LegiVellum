@@ -30,7 +30,7 @@
       "terminal": true
     },
     "TRANSFERRED": {
-      "description": "Responsibility moved to another custodian by a committed escalate receipt. Terminal for the issuing custodian; the continuation is a distinct obligation.",
+      "description": "Reserved. Custody transfer keeps the obligation OPEN under a new custodian rather than terminating it -- responsibility moved, it did not end -- so nothing enters this state today. Retained because the ledger may contain rows written before that was settled.",
       "open": false,
       "terminal": true
     }
@@ -102,7 +102,7 @@
         "OPEN",
         "OVERDUE"
       ],
-      "to_state": "TRANSFERRED",
+      "to_state": "OPEN",
       "bufferable": true,
       "bufferable_reason": "Same reasoning as COMPLETE: only the current custodian may escalate. Buffered escalation is not authoritative and does not move custody.",
       "minted_by": "sender",
@@ -115,16 +115,17 @@
         "escalation_target_present"
       ],
       "sets": {
-        "state": "TRANSFERRED",
-        "closed_by_receipt_id": "receipt.receipt_id",
-        "transferred_to": "receipt.escalation_to"
+        "current_custodian": "receipt.escalation_to",
+        "custody_deadline": "reset",
+        "accepted_receipt_id": "receipt.receipt_id"
       },
       "errors": {
         "missing": "ESCALATE_WITHOUT_ACCEPT",
         "terminal": "OBLIGATION_ALREADY_TERMINATED",
         "not_custodian": "ACTOR_NOT_CUSTODIAN",
         "routing": "ROUTING_INVARIANT_VIOLATION"
-      }
+      },
+      "transfer_semantics": "Moves custody within the same obligation instead of terminating it. The obligation is the responsibility, and transferring it does not discharge it -- somebody still owes the work. Making escalate terminal left the receiver visible nowhere: gone from the issuer's inbox because escalate closed it, absent from the receiver's because only accepted receipts were inbox-visible. The soft-push model had no reader. The previous custodian still cannot complete, because they are no longer the custodian."
     },
     {
       "name": "RECOVER",
@@ -133,7 +134,7 @@
       "from_states": [
         "OVERDUE"
       ],
-      "to_state": "TRANSFERRED",
+      "to_state": "OPEN",
       "bufferable": false,
       "bufferable_reason": "Recovery is contested in the same way acceptance is: several actors may try to reclaim one abandoned obligation. It must be notarized synchronously.",
       "guards": [
@@ -143,15 +144,16 @@
         "routing_invariant_holds"
       ],
       "sets": {
-        "state": "TRANSFERRED",
-        "closed_by_receipt_id": "receipt.receipt_id",
-        "transferred_to": "receipt.escalation_to"
+        "current_custodian": "receipt.escalation_to",
+        "custody_deadline": "reset",
+        "accepted_receipt_id": "receipt.receipt_id"
       },
       "errors": {
         "not_overdue": "OBLIGATION_NOT_RECOVERABLE",
         "terminal": "OBLIGATION_ALREADY_TERMINATED",
         "unauthorized": "ACTOR_NOT_PERMITTED"
-      }
+      },
+      "transfer_semantics": "Moves custody within the same obligation instead of terminating it. The obligation is the responsibility, and transferring it does not discharge it -- somebody still owes the work. Making escalate terminal left the receiver visible nowhere: gone from the issuer's inbox because escalate closed it, absent from the receiver's because only accepted receipts were inbox-visible. The soft-push model had no reader. The previous custodian still cannot complete, because they are no longer the custodian."
     }
   ],
   "operational_events": [

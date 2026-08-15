@@ -181,9 +181,19 @@ def transition_for_phase(phase: str, *, from_state: str) -> Transition:
         if t.phase == phase and from_state in t.from_states
     ]
     if not candidates:
+        # No transition of this phase is legal from here -- but the receipt
+        # still names one, and the caller needs the *specific* reason. Resolve
+        # by phase alone and let the state guard produce the documented code
+        # (COMPLETE_WITHOUT_ACCEPT, OBLIGATION_ALREADY_TERMINATED), rather than
+        # collapsing every illegal transition into one generic rejection.
+        by_phase = [t for t in _transitions().values() if t.phase == phase]
+        if by_phase:
+            by_phase.sort(key=lambda t: len(t.from_states), reverse=True)
+            return by_phase[0]
         raise IllegalTransition(
             "TRANSITION_NOT_PERMITTED",
-            f"no transition with phase {phase!r} is permitted from state {from_state!r}",
+            f"no transition has phase {phase!r}; known phases are "
+            f"{sorted({t.phase for t in _transitions().values()})}",
         )
     # ESCALATE and RECOVER both accept OVERDUE; ESCALATE is the ordinary act by
     # the custodian, RECOVER the reclaim by another party. Prefer the narrower

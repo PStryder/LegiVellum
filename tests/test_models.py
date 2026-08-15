@@ -27,6 +27,7 @@ class TestReceiptModel:
         receipt = Receipt(
             receipt_id="01JGXYZ123456789ABCDEFGHIJ",
             task_id="T-01JGXYZ123456789ABCDEFGHIJ",
+            obligation_id="01J0OBLIG0MODELTEST00000A",
             parent_task_id="NA",
             caused_by_receipt_id="NA",
             dedupe_key="NA",
@@ -68,6 +69,7 @@ class TestReceiptModel:
         receipt = Receipt(
             receipt_id="01JGXYZ123456789ABCDEFGHIJ",
             task_id="T-01JGXYZ123456789ABCDEFGHIJ",
+            obligation_id="01J0OBLIG0MODELTEST00000A",
             parent_task_id="NA",
             caused_by_receipt_id="NA",
             dedupe_key="NA",
@@ -111,6 +113,7 @@ class TestReceiptModel:
         receipt = Receipt(
             receipt_id="01JGXYZ123456789ABCDEFGHIJ",
             task_id="T-01JGXYZ123456789ABCDEFGHIJ",
+            obligation_id="01J0OBLIG0MODELTEST00000A",
             parent_task_id="NA",
             caused_by_receipt_id="NA",
             dedupe_key="NA",
@@ -152,6 +155,7 @@ class TestReceiptModel:
         receipt = Receipt(
             receipt_id="01JGXYZ123456789ABCDEFGHIJ",
             task_id="T-01JGXYZ123456789ABCDEFGHIJ",
+            obligation_id="01J0OBLIG0MODELTEST00000A",
             parent_task_id="NA",
             caused_by_receipt_id="NA",
             dedupe_key="NA",
@@ -201,6 +205,7 @@ class TestReceiptModel:
         receipt = Receipt(
             receipt_id="01JGXYZ123456789ABCDEFGHIJ",
             task_id="T-01JGXYZ123456789ABCDEFGHIJ",
+            obligation_id="01J0OBLIG0MODELTEST00000A",
             parent_task_id="NA",
             caused_by_receipt_id="NA",
             dedupe_key="NA",
@@ -244,6 +249,7 @@ class TestReceiptCreate:
         receipt = ReceiptCreate(
             receipt_id="01JGXYZ123456789ABCDEFGHIJ",
             task_id="T-01JGXYZ123456789ABCDEFGHIJ",
+            obligation_id="01J0OBLIG0MODELTEST00000A",
             parent_task_id="NA",
             caused_by_receipt_id="NA",
             dedupe_key="NA",

@@ -201,9 +201,26 @@ class TestPhaseResolution:
         """Same phase, different transition, decided by state not by string."""
         assert transitions.transition_for_phase("escalate", from_state="OVERDUE").name == "RECOVER"
 
-    def test_unknown_phase_from_state_is_refused(self):
+    def test_a_phase_illegal_from_this_state_still_resolves(self):
+        """Resolution answers "which transition is this", not "is it legal".
+
+        Legality is the guard's job, and separating them is what lets the
+        rejection carry the documented code -- COMPLETE_WITHOUT_ACCEPT rather
+        than a generic TRANSITION_NOT_PERMITTED for every illegal move.
+        """
+        assert transitions.transition_for_phase("complete", from_state="CLOSED").name == "COMPLETE"
+        with pytest.raises(IllegalTransition) as exc:
+            transitions.check_transition(
+                "COMPLETE",
+                current_state="CLOSED",
+                actor_is_custodian=True,
+                obligation_exists=True,
+            )
+        assert exc.value.code == "OBLIGATION_ALREADY_TERMINATED"
+
+    def test_a_phase_no_transition_declares_is_refused(self):
         with pytest.raises(IllegalTransition):
-            transitions.transition_for_phase("complete", from_state="CLOSED")
+            transitions.transition_for_phase("cancel", from_state="OPEN")
 
 
 class TestAuthorityModel:
