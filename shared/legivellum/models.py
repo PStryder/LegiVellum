@@ -77,6 +77,14 @@ class Receipt(BaseModel):
 
     # Task correlation
     task_id: str = Field(..., description="Correlation key for task lifecycle")
+    obligation_id: str = Field(
+        ...,
+        description=(
+            "Identifies one governed responsibility. Distinct from task_id, "
+            "which groups related work: only the obligation named here may "
+            "be opened, transferred or closed by this receipt."
+        ),
+    )
     parent_task_id: str = Field(default="NA", description="Parent task for delegation trees")
     caused_by_receipt_id: str = Field(default="NA", description="Provenance chain link")
     dedupe_key: str = Field(default="NA", description="Idempotency key")
@@ -226,6 +234,10 @@ class ReceiptCreate(BaseModel):
 
     # Task correlation
     task_id: str
+    # Identity of the responsibility itself. Required: an obligation that has no
+    # id can only be closed by matching on task_id, which is how one completion
+    # came to discharge several independent obligations.
+    obligation_id: str
     parent_task_id: str = "NA"
     caused_by_receipt_id: str = "NA"
     dedupe_key: str = "NA"

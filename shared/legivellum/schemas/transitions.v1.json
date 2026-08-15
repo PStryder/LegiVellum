@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legivellum.dev/spec/transitions.v1.json",
+  "version": "1.0",
+  "title": "LegiVellum obligation transition model v1",
+  "description": "The transition rules ReceiptGate evaluates at runtime. This file is data, not documentation: ReceiptGate loads it, and a proposed transition that does not appear here is refused. Obligation identity, the accepted-opens/terminal-closes rules, and the escalation parent/child linkage are taken from ReceiptGate/Receipt Protocol Golden.txt, which is otherwise superseded by docs/canonical/. Where Golden and the canonical schema disagreed on vocabulary the canonical schema won: phases are accepted/complete/escalate with canceled as a status, and escalation is sender-minted and routed to recipient_ai == escalation_to.",
+  "classification": {
+    "GOVERNANCE": "Changes the authoritative answer to 'who owes what'. Requires a committed ReceiptGate transition. Cannot be performed locally, cannot be buffered when it is contested, and does not occur because time passed.",
+    "OPERATIONAL": "Machinery that reflects governance state. May occur locally, may be lost and rebuilt, and never by itself changes who owes what."
+  },
+  "obligation_states": {
+    "NONE": {
+      "description": "No obligation with this obligation_id has been committed.",
+      "open": false,
+      "terminal": false
+    },
+    "OPEN": {
+      "description": "Committed and unresolved. Exactly one custodian holds it.",
+      "open": true,
+      "terminal": false
+    },
+    "OVERDUE": {
+      "description": "Open, past its custody deadline, and eligible for notarized recovery. The custodian is unchanged: reaching a deadline is not itself a transition. No other actor may accept it while it is in this state.",
+      "open": true,
+      "terminal": false
+    },
+    "CLOSED": {
+      "description": "Resolved by a committed complete receipt. Terminal.",
+      "open": false,
+      "terminal": true
+    },
+    "TRANSFERRED": {
+      "description": "Responsibility moved to another custodian by a committed escalate receipt. Terminal for the issuing custodian; the continuation is a distinct obligation.",
+      "open": false,
+      "terminal": true
+    }
+  },
+  "transitions": [
+    {
+      "name": "ACCEPT",
+      "classification": "GOVERNANCE",
+      "phase": "accepted",
+      "from_states": [
+        "NONE"
+      ],
+      "to_state": "OPEN",
+      "bufferable": false,
+      "bufferable_reason": "Acceptance is the contested transition: two workers may want the same obligation and neither can resolve that locally. It must reach ReceiptGate synchronously. If ReceiptGate is unreachable, acceptance fails and the worker has not obtained custody.",
+      "mutually_exclusive_on": [
+        "tenant_id",
+        "obligation_id"
+      ],
+      "guards": [
+        "obligation_does_not_exist",
+        "actor_may_accept",
+        "no_current_custodian"
+      ],
+      "sets": {
+        "current_custodian": "receipt.recipient_ai",
+        "custody_deadline": "required",
+        "accepted_receipt_id": "receipt.receipt_id"
+      },
+      "errors": {
+        "obligation_exists": "OBLIGATION_ALREADY_EXISTS",
+        "already_custodied": "OBLIGATION_ALREADY_ACCEPTED",
+        "terminal": "OBLIGATION_ALREADY_TERMINATED",
+        "unauthorized": "ACTOR_NOT_PERMITTED"
+      }
+    },
+    {
+      "name": "COMPLETE",
+      "classification": "GOVERNANCE",
+      "phase": "complete",
+      "from_states": [
+        "OPEN",
+        "OVERDUE"
+      ],
+      "to_state": "CLOSED",
+      "bufferable": true,
+      "bufferable_reason": "Only the established custodian may complete, so there is no contest to resolve. A buffered completion is NOT authoritative: the obligation remains OPEN, the worker remains custodian, and custody is not released until ReceiptGate commits.",
+      "guards": [
+        "obligation_exists",
+        "obligation_is_open",
+        "actor_is_current_custodian",
+        "not_already_terminal"
+      ],
+      "sets": {
+        "state": "CLOSED",
+        "closed_by_receipt_id": "receipt.receipt_id"
+      },
+      "errors": {
+        "missing": "COMPLETE_WITHOUT_ACCEPT",
+        "terminal": "OBLIGATION_ALREADY_TERMINATED",
+        "not_custodian": "ACTOR_NOT_CUSTODIAN"
+      }
+    },
+    {
+      "name": "ESCALATE",
+      "classification": "GOVERNANCE",
+      "phase": "escalate",
+      "from_states": [
+        "OPEN",
+        "OVERDUE"
+      ],
+      "to_state": "TRANSFERRED",
+      "bufferable": true,
+      "bufferable_reason": "Same reasoning as COMPLETE: only the current custodian may escalate. Buffered escalation is not authoritative and does not move custody.",
+      "minted_by": "sender",
+      "minted_by_reason": "The issuing custodian mints it, per receipt.rules.md's soft-push model. Golden required receiver-minting; the canonical routing invariant recipient_ai == escalation_to won.",
+      "guards": [
+        "obligation_exists",
+        "obligation_is_open",
+        "actor_is_current_custodian",
+        "routing_invariant_holds",
+        "escalation_target_present"
+      ],
+      "sets": {
+        "state": "TRANSFERRED",
+        "closed_by_receipt_id": "receipt.receipt_id",
+        "transferred_to": "receipt.escalation_to"
+      },
+      "errors": {
+        "missing": "ESCALATE_WITHOUT_ACCEPT",
+        "terminal": "OBLIGATION_ALREADY_TERMINATED",
+        "not_custodian": "ACTOR_NOT_CUSTODIAN",
+        "routing": "ROUTING_INVARIANT_VIOLATION"
+      }
+    },
+    {
+      "name": "RECOVER",
+      "classification": "GOVERNANCE",
+      "phase": "escalate",
+      "from_states": [
+        "OVERDUE"
+      ],
+      "to_state": "TRANSFERRED",
+      "bufferable": false,
+      "bufferable_reason": "Recovery is contested in the same way acceptance is: several actors may try to reclaim one abandoned obligation. It must be notarized synchronously.",
+      "guards": [
+        "obligation_exists",
+        "obligation_is_overdue",
+        "actor_may_recover",
+        "routing_invariant_holds"
+      ],
+      "sets": {
+        "state": "TRANSFERRED",
+        "closed_by_receipt_id": "receipt.receipt_id",
+        "transferred_to": "receipt.escalation_to"
+      },
+      "errors": {
+        "not_overdue": "OBLIGATION_NOT_RECOVERABLE",
+        "terminal": "OBLIGATION_ALREADY_TERMINATED",
+        "unauthorized": "ACTOR_NOT_PERMITTED"
+      }
+    }
+  ],
+  "operational_events": [
+    {
+      "name": "OFFER",
+      "classification": "OPERATIONAL",
+      "description": "AsyncGate offers a task to a polling worker. Transient. No receipt, no obligation, and a worker may ignore it with no protocol consequence.",
+      "changes_custody": false
+    },
+    {
+      "name": "LEASE_MATERIALIZED",
+      "classification": "OPERATIONAL",
+      "description": "AsyncGate creates the local lease that lets a worker execute. Follows a committed ACCEPT; if it fails, canonical custody still holds and the lease is rebuilt.",
+      "changes_custody": false
+    },
+    {
+      "name": "LEASE_EXPIRED",
+      "classification": "OPERATIONAL",
+      "description": "A local lease timer elapsed. This is the load-bearing case: the obligation becomes OVERDUE and eligible for recovery, but the custodian is UNCHANGED. Wall-clock passage must not perform a governance transition, so no other actor may accept until a RECOVER transition commits.",
+      "changes_custody": false,
+      "marks_overdue": true
+    },
+    {
+      "name": "LEASE_RENEWED",
+      "classification": "OPERATIONAL",
+      "description": "Extends the local execution window. Does not extend canonical custody by itself.",
+      "changes_custody": false
+    },
+    {
+      "name": "PROGRESS",
+      "classification": "OPERATIONAL",
+      "description": "Worker reports partial progress. Never opens or closes an obligation.",
+      "changes_custody": false
+    },
+    {
+      "name": "WORKER_LOST",
+      "classification": "OPERATIONAL",
+      "description": "A worker process or an AsyncGate instance disappeared. Operational projections may vanish; canonical custody persists and requires a committed RECOVER to move.",
+      "changes_custody": false
+    }
+  ],
+  "invariants": [
+    {
+      "id": "one-custodian",
+      "statement": "At most one current custody grant exists per (tenant_id, obligation_id).",
+      "enforced_by": "database unique constraint on the custody projection, not check-then-write",
+      "mechanism": "db_constraint"
+    },
+    {
+      "id": "receipts-immutable",
+      "statement": "Receipt rows are never updated or deleted to express current state. Closure and transfer mutate the projection only.",
+      "enforced_by": "no UPDATE/DELETE path against the receipt table; projection carries current state",
+      "mechanism": "no_code_path"
+    },
+    {
+      "id": "atomic-append-and-project",
+      "statement": "The receipt append and the projection mutation it implies occur in one database transaction.",
+      "enforced_by": "single transaction in ReceiptGate's commit path",
+      "mechanism": "single_transaction"
+    },
+    {
+      "id": "projection-rebuildable",
+      "statement": "The projection is reconstructible from the immutable receipt ledger alone, and the ledger is authoritative when they disagree.",
+      "enforced_by": "rebuild routine plus a test asserting rebuild equals live projection",
+      "mechanism": "rebuild_check"
+    },
+    {
+      "id": "deadline-is-not-a-transition",
+      "statement": "Reaching a custody deadline does not change the custodian. Only a committed RECOVER or ESCALATE does.",
+      "enforced_by": "OVERDUE is a state with an unchanged custodian; no scheduled job mutates custody",
+      "mechanism": "state_machine"
+    },
+    {
+      "id": "obligation-scoped-termination",
+      "statement": "A terminal receipt closes only the obligation_id it names. Receipts sharing a task_id are independent.",
+      "enforced_by": "terminator queries correlate on obligation_id, never bare task_id",
+      "mechanism": "query_scope"
+    }
+  ],
+  "enforcement_mechanisms": {
+    "db_constraint": "A database constraint makes the violation unrepresentable.",
+    "single_transaction": "The operations occur in one database transaction.",
+    "query_scope": "Queries are scoped so the violation cannot be expressed.",
+    "no_code_path": "No code path exists that could perform the violation.",
+    "state_machine": "The transition model refuses the violating transition.",
+    "rebuild_check": "A routine rebuilds the value and a test asserts equality."
+  }
+}

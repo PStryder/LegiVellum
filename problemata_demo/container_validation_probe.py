@@ -54,6 +54,7 @@ GOOD_RECEIPT = {
     "tenant_id": "default",
     "receipt_id": "01J0PROBE0000000000000000",
     "task_id": "T-probe-1",
+    "obligation_id": "01J0OBLIG0PROBE0000000000A",
     "parent_task_id": "NA",
     "caused_by_receipt_id": "NA",
     "dedupe_key": "probe:accepted",
@@ -142,6 +143,16 @@ def main() -> int:
         "known-bad canonical receipt is rejected",
         validation.validate_json_schema(bad) != [],
         "the validator accepted a receipt the canonical rules forbid",
+    )
+
+    # 4b. obligation_id is required as of schema v1.1. Without it a terminal
+    #     receipt can only be matched to an obligation by task_id, which is how
+    #     one completion came to discharge several independent obligations.
+    missing_obligation = {k: v for k, v in GOOD_RECEIPT.items() if k != "obligation_id"}
+    check(
+        "receipt without obligation_id is rejected",
+        validation.validate_json_schema(missing_obligation) != [],
+        "obligation_id is not required; obligations have no identity",
     )
 
     # 5. additionalProperties: false must hold. This is what rejects a

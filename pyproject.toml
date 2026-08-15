@@ -118,3 +118,7 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+# N818 wants every exception named *Error. IllegalTransition and NotPermitted
+# are the protocol's vocabulary and read better as written; the rest of N stays on.
+ignore = ["N818"]

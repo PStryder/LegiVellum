@@ -3,6 +3,7 @@
   "tenant_id": "pstryder",
   "receipt_id": "01HTZQC5D3F0R9S8T7U6V5W4X3",
   "task_id": "T-01HTZQC5D3F0R9S8T7U6V5W4X3",
+  "obligation_id": "01J0OBLIG0CONTINUATION00BB",
   "parent_task_id": "T-01HTZQ8S3C8Y8Y1QJQ5Y8Z9F6G",
   "caused_by_receipt_id": "01HTZQ9A7J6Z3F7C5N8V1K2M3P",
   "dedupe_key": "NA",

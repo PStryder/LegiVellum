@@ -23,6 +23,7 @@ The properties that matter to the protocol, and that the tests pin:
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import time
 
@@ -81,3 +82,31 @@ def timestamp_ms_of(value: str) -> int:
     for char in value[:10]:
         result = (result << 5) | _CROCKFORD.index(char)
     return result
+
+
+def derive_ulid(*parts: str) -> str:
+    """Derive a stable, ULID-shaped identifier from the things that define it.
+
+    An obligation is opened by one receipt and closed by another, and most
+    emitters build those in separate calls with no shared state -- CogniGate
+    builds `accepted` when a lease starts and `complete` when it ends, from
+    different code paths. Minting a random id in each would give one obligation
+    two identities, and the closing receipt would name an obligation that was
+    never opened.
+
+    So the id is derived from the identifiers that already pin the obligation
+    down (for a leased job, the lease id). Same inputs, same id; different
+    inputs, different id, with 128 bits of hash so collisions are not a
+    practical concern.
+
+    The result is the same 26-character Crockford Base32 shape as `new_ulid`,
+    so nothing downstream needs to know which way an id was produced. It is
+    NOT time-ordered -- derived ids sort arbitrarily, which is fine because
+    ordering is a property of `receipt_id`, not of obligation identity.
+    """
+    if not parts or any(not p for p in parts):
+        raise ValueError("derive_ulid requires at least one non-empty part")
+    # Length-prefix each part so ("a", "bc") and ("ab", "c") cannot collide.
+    material = "\x1f".join(f"{len(p)}:{p}" for p in parts).encode("utf-8")
+    digest = hashlib.blake2b(material, digest_size=16).digest()
+    return _encode(int.from_bytes(digest, "big"), _TOTAL_CHARS)[-_TOTAL_CHARS:]

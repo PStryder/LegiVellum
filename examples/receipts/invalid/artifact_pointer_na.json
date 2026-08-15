@@ -3,6 +3,7 @@
   "tenant_id": "pstryder",
   "receipt_id": "01INVALID2ARTIFACTNA",
   "task_id": "T-INVALID-2",
+  "obligation_id": "01J0OBLIG0INVALID0000000CC",
   "parent_task_id": "NA",
   "caused_by_receipt_id": "NA",
   "dedupe_key": "NA",

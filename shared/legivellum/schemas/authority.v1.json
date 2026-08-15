@@ -1,0 +1,116 @@
+{
+  "$id": "https://legivellum.dev/spec/authority.v1.json",
+  "version": "1.0",
+  "title": "LegiVellum principal and authority model v1",
+  "description": "The identities the protocol distinguishes, where each one lives, and which transitions each role may propose. ReceiptGate loads this and evaluates it; it is not a description of what ReceiptGate does. Receipts keep their four principal fields unchanged -- the richer model lives in the obligation and custody projections, and every projection field is reconstructible from the immutable ledger so the projection is never a second source of truth.",
+
+  "identities": [
+    {
+      "role": "authorizer_principal",
+      "question": "Who authorized this obligation?",
+      "scope": "obligation",
+      "stable": true,
+      "derived_from": "receipt.from_principal on the ACCEPT receipt",
+      "storage": "obligations projection"
+    },
+    {
+      "role": "beneficiary_principal",
+      "question": "Who is the outcome owed to?",
+      "scope": "obligation",
+      "stable": true,
+      "derived_from": "receipt.for_principal on the ACCEPT receipt",
+      "storage": "obligations projection"
+    },
+    {
+      "role": "visibility_principal",
+      "question": "Who may observe this obligation and its evidence?",
+      "scope": "obligation",
+      "stable": true,
+      "derived_from": "authenticated tenant/authority at commit time, recorded as receipt.tenant_id",
+      "storage": "obligations projection",
+      "note": "Must derive from authenticated identity, never from a caller-supplied string. This is the identity the schema had no field for; it is reconstructible because tenant_id is server-assigned and present on every receipt."
+    },
+    {
+      "role": "current_custodian",
+      "question": "Who currently holds responsibility?",
+      "scope": "custody",
+      "stable": false,
+      "derived_from": "receipt.recipient_ai on the ACCEPT receipt, then receipt.escalation_to on each committed transfer",
+      "storage": "custody projection",
+      "note": "Distinct from recipient_ai as an inbox routing key. Conflating them is why a completion could close an obligation its issuer never held."
+    },
+    {
+      "role": "transition_actor",
+      "question": "Who performed this transition?",
+      "scope": "receipt",
+      "stable": false,
+      "derived_from": "authenticated principal at commit time",
+      "storage": "custody projection history",
+      "note": "Bound server-side. A component holding a shared key must not be able to assert that some other principal performed a transition."
+    },
+    {
+      "role": "service_emitter",
+      "question": "Which service emitted the protocol operation?",
+      "scope": "receipt",
+      "stable": false,
+      "derived_from": "receipt.source_system, bound to the authenticated service identity",
+      "storage": "receipt"
+    }
+  ],
+
+  "roles": {
+    "principal": {
+      "description": "An external actor that may authorize work.",
+      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+    },
+    "delegate": {
+      "description": "A planning authority. May mint obligations.",
+      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+    },
+    "worker": {
+      "description": "Executes leased work. May take and discharge custody but may not authorize new obligations for others.",
+      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+    },
+    "service": {
+      "description": "An infrastructure component acting on its own behalf.",
+      "may_propose": ["ACCEPT", "COMPLETE", "ESCALATE"]
+    },
+    "observer": {
+      "description": "Read-only. May observe within its visibility scope and may propose nothing.",
+      "may_propose": []
+    }
+  },
+
+  "rules": [
+    {
+      "id": "custodian-only-terminal",
+      "statement": "COMPLETE and ESCALATE may be proposed only by the current custodian of the obligation.",
+      "applies_to": ["COMPLETE", "ESCALATE"],
+      "check": "actor_is_current_custodian"
+    },
+    {
+      "id": "recover-not-by-custodian",
+      "statement": "RECOVER reclaims an obligation whose custodian is absent; it is proposed by another party and is only legal from OVERDUE.",
+      "applies_to": ["RECOVER"],
+      "check": "obligation_is_overdue"
+    },
+    {
+      "id": "observer-proposes-nothing",
+      "statement": "An observer role may never propose a governance transition, regardless of credential.",
+      "applies_to": ["ACCEPT", "COMPLETE", "ESCALATE", "RECOVER"],
+      "check": "role_may_propose"
+    },
+    {
+      "id": "visibility-scoped-reads",
+      "statement": "A principal may observe an obligation only when its authenticated visibility scope matches the obligation's visibility_principal.",
+      "applies_to": ["OBSERVE"],
+      "check": "visibility_matches"
+    },
+    {
+      "id": "server-derived-identity",
+      "statement": "transition_actor, service_emitter and visibility_principal are bound from authenticated context and any conflicting caller-supplied value is rejected rather than honoured.",
+      "applies_to": ["ACCEPT", "COMPLETE", "ESCALATE", "RECOVER"],
+      "check": "identity_bound_to_credential"
+    }
+  ]
+}

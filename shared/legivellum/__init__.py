@@ -31,7 +31,9 @@ __version__ = "0.1.0"
 
 # Protocol surface. Light by construction: pydantic for models, jsonschema for
 # validation. Eager on purpose -- see the module docstring.
+from .authority import NotPermitted, Principal
 from .models import EscalationClass, OutcomeKind, Phase, Receipt, Status
+from .transitions import IllegalTransition, may_buffer, requires_notarization
 from .ulid import is_ulid, new_ulid
 from .validation import validate_receipt
 
@@ -109,6 +111,12 @@ __all__ = [
     "validate_receipt",
     "new_ulid",
     "is_ulid",
+    # constitution: transition model + authority model
+    "IllegalTransition",
+    "NotPermitted",
+    "Principal",
+    "may_buffer",
+    "requires_notarization",
     # control plane (lazy)
     *sorted(_LAZY),
     *sorted(_LAZY_ALIASES),
