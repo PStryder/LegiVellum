@@ -24,14 +24,16 @@ services:
 
   metagate:
     build:
-      context: ../../MetaGate
-      dockerfile: Dockerfile
+      # Stack root: the image installs the sibling protocol package, which is
+      # a hard dependency and is not on any index.
+      context: ../..
+      dockerfile: MetaGate/Dockerfile
     container_name: problemata-metagate
     environment:
       METAGATE_DATABASE_URL: postgresql+asyncpg://metagate:metagate@metagate-db:5432/metagate
       METAGATE_DEBUG: "true"
       METAGATE_JWT_SECRET: ${METAGATE_JWT_SECRET:-dev-secret}
-      METAGATE_DEFAULT_TENANT_KEY: ${PROBLEMATA_TENANT_KEY:-default}
+      METAGATE_DEFAULT_TENANT_KEY: ${PROBLEMATA_TENANT_KEY:-00000000-0000-0000-0000-000000000000}
       METAGATE_DEFAULT_DEPLOYMENT_KEY: ${PROBLEMATA_DEPLOYMENT_KEY:-local}
     ports:
       - "8100:8000"
@@ -54,7 +56,7 @@ services:
         condition: service_healthy
     environment:
       METAGATE_DB_DSN: postgresql://metagate:metagate@metagate-db:5432/metagate
-      PROBLEMATA_TENANT_KEY: ${PROBLEMATA_TENANT_KEY:-default}
+      PROBLEMATA_TENANT_KEY: ${PROBLEMATA_TENANT_KEY:-00000000-0000-0000-0000-000000000000}
       PROBLEMATA_DEPLOYMENT_KEY: ${PROBLEMATA_DEPLOYMENT_KEY:-local}
       PROBLEMATA_PRINCIPAL_KEY: ${PROBLEMATA_PRINCIPAL_KEY:-problemata-demo-principal}
       PROBLEMATA_AUTH_SUBJECT: ${PROBLEMATA_AUTH_SUBJECT:-problemata-demo-subject}
@@ -100,6 +102,12 @@ services:
       # because nothing ever ran it.
       RECEIPTGATE_DATABASE_URL: postgresql+psycopg://receiptgate:receiptgate@receiptgate-db:5432/receiptgate
       RECEIPTGATE_ALLOW_INSECURE_DEV: "true"
+      # The tenant the ledger's principal is scoped to. It must be the tenant
+      # the obligations actually belong to -- AsyncGate's -- because a receipt
+      # claiming a tenant its emitter is not scoped to is refused. It was left
+      # at the "default" default while AsyncGate stamped this UUID, so every
+      # receipt in the demo was rejected TENANT_MISMATCH and buffered.
+      RECEIPTGATE_DEFAULT_TENANT_ID: ${PROBLEMATA_TENANT_KEY:-00000000-0000-0000-0000-000000000000}
       RECEIPTGATE_ENABLE_GRAPH_LAYER: "false"
       RECEIPTGATE_ENABLE_SEMANTIC_LAYER: "false"
       RECEIPTGATE_AUTO_MIGRATE_ON_STARTUP: "true"
@@ -153,8 +161,10 @@ services:
   # Planning authority. Mints obligations; never executes them.
   delegate:
     build:
-      context: ../../DeleGate
-      dockerfile: Dockerfile
+      # Stack root: the image installs the sibling protocol package, which is
+      # a hard dependency and is not on any index.
+      context: ../..
+      dockerfile: DeleGate/Dockerfile
     container_name: problemata-delegate
     environment:
       DELEGATE_DATABASE_URL: postgresql+asyncpg://delegate:delegate@delegate-db:5432/delegate
@@ -169,6 +179,11 @@ services:
       # authority as a planning authority; it never executes them.
       DELEGATE_ASYNCGATE_URL: http://asyncgate:8080
       DELEGATE_ASYNCGATE_API_KEY: ${ASYNCGATE_API_KEY:-dev_asyncgate_key}
+      # The tenant DeleGate stamps on its OWN receipts. It fell back to
+      # "default" while the ledger was scoped elsewhere, so every plan
+      # receipt was refused -- and DeleGate correctly declined to dispatch
+      # work whose receipt would not commit.
+      DELEGATE_DEFAULT_TENANT_ID: ${PROBLEMATA_TENANT_KEY:-00000000-0000-0000-0000-000000000000}
       DELEGATE_ASYNCGATE_TENANT_ID: ${PROBLEMATA_ASYNCGATE_TENANT:-00000000-0000-0000-0000-000000000000}
       # Cognition comes from CogniGate, the primitive that owns it, rather than
       # DeleGate holding a second AI client. CogniGate itself defaults to its
@@ -208,9 +223,13 @@ services:
 
   # Admission control. ALLOW or DENY only; no orchestration, no storage.
   interrogate:
-    image: python:3.11-slim
+    # Built from its own Dockerfile. It had none, so the demo pip-installed it
+    # into a bare python:3.11-slim -- which stopped working the moment it
+    # gained a dependency that is not on an index.
+    build:
+      context: ../..
+      dockerfile: InterroGate/Dockerfile
     container_name: problemata-interrogate
-    working_dir: /app/interrogate
     environment:
       INTERROGATE_ALLOW_INSECURE_DEV: "true"
       INTERROGATE_RECEIPTGATE_URL: http://receiptgate:8000/mcp
@@ -222,12 +241,7 @@ services:
       - receiptgate
       - metagate
     volumes:
-      - ../../InterroGate:/app/interrogate
       - ../../LegiVellum/shared:/LegiVellum/shared:ro
-    command:
-      - sh
-      - -c
-      - pip install --no-cache-dir /app/interrogate && python -m uvicorn interrogate.mcp:app --host 0.0.0.0 --port 8000
 
   asyncgate-db:
     image: postgres:16-alpine
@@ -270,7 +284,10 @@ services:
       # the seed and both sides need the same value.
       ASYNCGATE_METAGATE_ENDPOINT: http://metagate:8000
       ASYNCGATE_METAGATE_API_KEY: ${PROBLEMATA_ASYNCGATE_API_KEY:-mgk_demo_asyncgate_bootstrap_key}
-      ASYNCGATE_RECEIPTGATE_TENANT_ID: ${PROBLEMATA_TENANT_KEY:-default}
+      # ASYNCGATE_RECEIPTGATE_TENANT_ID is deliberately absent. It was set here
+      # to "default" and read by nothing: AsyncGate stamps receipts with the
+      # obligation's own tenant, so the setting described a translation between
+      # tenant namespaces that did not exist. The two sides agree directly now.
       ASYNCGATE_RATE_LIMIT_ENABLED: "false"
       ASYNCGATE_ESCALATION_ENABLED: "true"
       ASYNCGATE_ESCALATION_TARGETS: '[{"class":1,"to_kind":"worker","to_id":"fallback-worker"}]'
@@ -312,8 +329,10 @@ services:
 
   depotgate:
     build:
-      context: ../../DepotGate
-      dockerfile: Dockerfile
+      # Stack root: the image installs the sibling protocol package, which is
+      # a hard dependency and is not on any index.
+      context: ../..
+      dockerfile: DepotGate/Dockerfile
     container_name: problemata-depotgate
     environment:
       DEPOTGATE_POSTGRES_HOST: depotgate-db
@@ -337,8 +356,10 @@ services:
 
   cognigate:
     build:
-      context: ../../CogniGate
-      dockerfile: Dockerfile
+      # Stack root: the image installs the sibling protocol package, which is
+      # a hard dependency and is not on any index.
+      context: ../..
+      dockerfile: CogniGate/Dockerfile
     container_name: problemata-cognigate
     # No longer profiled. It defaults to the stub AI provider, which answers
     # locally and deterministically, so the lease -> execute -> artifact ->

@@ -46,6 +46,13 @@ RECEIPTGATE_URL = _env("RECEIPTGATE_URL", "http://localhost:8300")
 METAGATE_URL = _env("METAGATE_URL", "http://localhost:8100")
 METAGATE_API_KEY = _env("METAGATE_API_KEY")
 
+# The tenant the probe's receipts claim. It must be the one ReceiptGate's
+# principal is scoped to, or every submission is refused TENANT_MISMATCH before
+# the invariant under test is ever reached -- and a probe that only ever sees
+# refusals passes its "this must be refused" cases for the wrong reason.
+# Matches PROBLEMATA_ASYNCGATE_TENANT in docker-compose.yml.
+TENANT_ID = _env("PROBLEMATA_ASYNCGATE_TENANT", "00000000-0000-0000-0000-000000000000")
+
 
 class ProbeFailure(Exception):
     """Raised when the stack accepted something it should have refused."""
@@ -81,9 +88,15 @@ def _receipt(**overrides: Any) -> dict[str, Any]:
     task_id = overrides.pop("_task_id", f"probe-{uuid.uuid4()}")
     base = {
         "schema_version": "1.0",
-        "tenant_id": "default",
+        "tenant_id": TENANT_ID,
         "receipt_id": str(uuid.uuid4()),
         "task_id": task_id,
+        # Derived from the task rather than random, so the accept/complete pairs
+        # these probes build address the same obligation. A fresh id per receipt
+        # would make every completion target an obligation that was never
+        # opened, and the probe would "pass" on a refusal that had nothing to do
+        # with the invariant under test.
+        "obligation_id": f"obl-{task_id}",
         "parent_task_id": "NA",
         "caused_by_receipt_id": "NA",
         "dedupe_key": "NA",
@@ -263,8 +276,16 @@ def probe_escalate_accepts_valid_routing() -> None:
 
     Without this, every probe above would pass if the ledger simply refused
     everything.
+
+    The escalation has to follow an acceptance. Escalating transfers custody of
+    an obligation, so there must be an obligation to transfer: a bare escalate
+    is refused ESCALATE_WITHOUT_ACCEPT, which is the ledger behaving correctly
+    and would leave this control unable to distinguish that from a ledger that
+    refuses everything.
     """
-    _must_accept("well-formed escalate", _submit(_escalate()))
+    task_id = f"probe-{uuid.uuid4()}"
+    _must_accept("opening acceptance", _submit(_receipt(_task_id=task_id)))
+    _must_accept("well-formed escalate", _submit(_escalate(_task_id=task_id)))
 
 
 # --- immutability -----------------------------------------------------------
