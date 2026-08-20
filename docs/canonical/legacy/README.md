@@ -26,6 +26,11 @@ The canonical, authoritative specifications are:
 **Components:**
 - `asyncgate.lease.md` - AsyncGate lease protocol
 
+**Executable, and binding where prose and data disagree:**
+- `legivellum/schemas/transitions.v1.json` - obligation states, legal
+  transitions, which are contested, and the typed errors they raise
+- `legivellum/schemas/authority.v1.json` - the principal model
+
 **Architecture:**
 - `vellum.spec.md` - Vellum language specification
 - `problemata.spec.md` - Problemata contract
@@ -48,6 +53,28 @@ These legacy documents may contain concepts that were **deprecated** in the fina
 
 **Event types:** Early versions had a taxonomy of event types. The final design uses **phase** as the primary discriminator.
 
+### Moved here from ReceiptGate's repository root (2026-08-20)
+
+Five files sat loose at the top of the ReceiptGate repo. They are design
+material from the same era as the rest of this folder, and they were being read
+as current because of where they lived:
+
+- `Receipt Protocol Golden.txt` — declares itself **"Status: Canonical /
+  Authoritative"**, which it is not. `docs/canonical/` is normative. This
+  document's obligation model was mined into `transitions.v1.json`, which is
+  what the code actually loads.
+- `Escalation Semantics.txt` — states *"Only the receiving component mints the
+  escalate receipt."* **The opposite is enforced.** Escalation is issued by the
+  principal that currently holds the obligation, because only the custodian may
+  hand one on; a receipt claiming otherwise is refused ACTOR_NOT_CUSTODIAN.
+- `receipts.put Contract.txt`, `Schema fort receipt and escalation body.txt` —
+  REST/OpenAPI shapes for an HTTP surface. The protocol is MCP-only.
+- `Excellent. This is the right moment.txt` — a chat transcript.
+
+The escalation one is the reason this move mattered rather than being tidiness.
+A reader looking for how escalation works found a confident, wrong answer in a
+file whose location implied authority.
+
 ### Why These Files Exist
 
 They document the evolution of LegiVellum's design and provide context for architectural decisions. Reading them can help understand *why* certain choices were made, but they should not be implemented.
@@ -66,5 +93,5 @@ They document the evolution of LegiVellum's design and provide context for archi
 
 ---
 
-*Last updated: 2026-01-04*  
+*Last updated: 2026-08-20*  
 *Technomancy Laboratories*
