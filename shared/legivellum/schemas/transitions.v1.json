@@ -28,11 +28,6 @@
       "description": "Resolved by a committed complete receipt. Terminal.",
       "open": false,
       "terminal": true
-    },
-    "TRANSFERRED": {
-      "description": "Reserved. Custody transfer keeps the obligation OPEN under a new custodian rather than terminating it -- responsibility moved, it did not end -- so nothing enters this state today. Retained because the ledger may contain rows written before that was settled.",
-      "open": false,
-      "terminal": true
     }
   },
   "transitions": [

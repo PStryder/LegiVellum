@@ -1,8 +1,8 @@
 # LegiVellum Worker Contract (MCP Server) v0
 
 Status: Draft (normative for problemata compatibility)  
-Version: 0.1  
-Last updated: 2026-01-31
+Version: 0.2  
+Last updated: 2026-08-20
 
 This document defines the minimum contract a generic MCP worker MUST follow
 to interoperate with LegiVellum problemata. A "worker" here is any MCP server
@@ -23,8 +23,21 @@ Normative keywords (MUST, SHOULD, MAY, etc.) follow RFC 2119 semantics.
    and routing configuration.
 
 3) **Emit receipts**  
-   The worker MUST emit `accepted` and `complete` receipts to ReceiptGate.
-   If it cannot complete the work, it MUST emit `escalate`.
+   The worker MUST emit a `complete` receipt for every obligation it holds, and
+   `escalate` if it cannot complete the work.
+
+   The worker does **not** emit its own `accepted` receipt. Opening an
+   obligation is minting one, which §2 forbids; the dispatcher — AsyncGate —
+   proposes the acceptance on the worker's behalf when the worker claims a
+   lease, and the worker becomes custodian as `for_principal`. Earlier versions
+   of this document required the worker to emit `accepted` while also
+   prohibiting it from minting obligations, which are the same act described
+   twice.
+
+   Every receipt in an obligation's lifecycle MUST carry the `obligation_id`
+   opened by that acceptance. A worker that mints a fresh one opens a second,
+   competing obligation for the same work, leaving the first owed by nobody in
+   practice and open forever in the ledger.
 
 4) **Externalize artifacts**  
    Substantial outputs MUST be written to DepotGate and referenced by pointer
@@ -44,7 +57,8 @@ Normative keywords (MUST, SHOULD, MAY, etc.) follow RFC 2119 semantics.
 ## 2. Prohibitions (Hard Boundaries)
 
 Workers MUST NOT:
-- Mint new obligations (tasks/plans)  
+- Mint new obligations (tasks/plans), which includes emitting their own
+  `accepted` receipt or inventing an `obligation_id`  
 - Route or schedule work for other workers  
 - Maintain hidden long-term state unless explicitly allowed  
 - Emit receipts without a valid task envelope

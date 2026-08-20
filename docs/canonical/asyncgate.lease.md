@@ -1,8 +1,13 @@
 # AsyncGate Lease Protocol
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Draft Specification  
-**Last Updated:** 2026-01-04
+**Last Updated:** 2026-08-20
+
+> Custody rules cited here are defined by `transitions.v1.json` — obligation
+> states, transitions, and the operational events that are explicitly *not*
+> transitions. Where this document previously described custody itself, it had
+> drifted from that model in ways that mattered; those passages now cite it.
 
 ## Overview
 
@@ -137,13 +142,28 @@ Worker receives offer → emits `accepted` receipt to ReceiptGate:
 {
   "phase": "accepted",
   "task_id": "T-123",
+  "obligation_id": "01J8ZK7Q3M4N5P6R7S8T9V0W1X",
+  "for_principal": "worker.codegen",
   "recipient_ai": "worker.codegen",
-  "source_system": "worker.codegen-123",
+  "source_system": "asyncgate",
   ...
 }
 ```
 
-**This creates the obligation.** Worker is now accountable via receipt ledger.
+**This creates the obligation.** The worker is now accountable via the receipt
+ledger, and `for_principal` — the taskee — becomes the obligation's custodian.
+
+Two details in that payload are load-bearing:
+
+- `source_system` is **AsyncGate**, not the worker. AsyncGate proposes the
+  acceptance on the worker's behalf; the worker does not mint its own
+  obligation. The emitting service and the principal performing the transition
+  are different identities by design. ReceiptGate derives `source_system` from
+  the credential and refuses a receipt that claims a different one
+  (`IDENTITY_MISMATCH`), so a worker cannot assert this even if it tried.
+- `obligation_id` names the one governed responsibility this receipt opens, and
+  every later receipt in its lifecycle repeats it. It is not the `task_id`: a
+  task may fan out into several independent obligations.
 
 ### 3. Heartbeat (Optional v1, Required v2)
 
@@ -178,10 +198,24 @@ AsyncGate detects completion (by polling ReceiptGate for receipts) → marks lea
 
 If `now() > lease_expires_at` and no `complete` receipt exists:
 
-1. AsyncGate marks lease as expired
+1. AsyncGate marks the lease as expired
 2. Task returns to `queued` status (or `retry_pending` if retries configured)
-3. Task becomes available for new lease grant
-4. If late `complete` receipt arrives, AsyncGate handles idempotently (deduplication via `dedupe_key`)
+3. Task becomes available for a new lease offer
+4. If a late `complete` receipt arrives, AsyncGate handles it idempotently
+   (deduplication via `dedupe_key`)
+
+**None of that changes custody.** Lease expiry is an operational event
+(`LEASE_EXPIRED`, `changes_custody: false`, `marks_overdue: true`), not a
+transition. The obligation is still owed by the same custodian; it is now
+overdue. Reaching a deadline is not a self-executing transfer of
+responsibility — if it were, an obligation could change hands with no receipt,
+which is the one thing the protocol exists to prevent.
+
+So a re-offered task is an offer of *work*, not a handover of the obligation. A
+second worker accepting it does not inherit the first worker's responsibility,
+and must not open a second obligation for it. Moving custody requires an
+`escalate` receipt naming the new custodian, which is a proposal that can be
+refused, not a timeout that fires.
 
 ---
 
@@ -224,12 +258,20 @@ If `now() > lease_expires_at` and no `complete` receipt exists:
 **Worker crashes after accepting:**
 ```
 1. Poll → receive offer
-2. Emit `accepted` receipt
+2. AsyncGate proposes `accepted` on the worker's behalf; obligation opens
 3. Worker crashes
-4. Lease expires → AsyncGate detects orphan
-5. Emit `escalate` receipt (escalation_class: "policy", reason: "lease_expired")
-6. Task requeued for retry (or escalated to supervisor)
+4. Lease expires → AsyncGate detects the orphan
+   → obligation becomes OVERDUE, still owed by the crashed worker
+5. Emit `escalate` receipt naming the new custodian
+   (escalation_class: "policy", reason: "lease_expired")
+   → custody moves only once that receipt commits
+6. Task re-offered so the new custodian can do the work
 ```
+
+Step 5 is the step that matters, and it is a proposal the ledger can refuse. If
+it never commits, the obligation stays overdue against the crashed worker —
+visibly unresolved rather than quietly reassigned. An orphaned obligation that
+nobody is shown still owing is the failure this sequence exists to prevent.
 
 ---
 
@@ -291,7 +333,9 @@ Worker should retry with exponential backoff.
 ### Worker Responsibilities
 
 - **Poll regularly** (but respect backoff on 204/503)
-- **Emit `accepted` receipt** before starting work
+- **Do not mint your own obligation.** AsyncGate proposes `accepted` on your
+  behalf when you claim a lease; a worker that emits its own opens a second,
+  competing obligation for the same work
 - **Emit `complete` receipt** on finish (success or failure)
 - **Handle `task_type` gracefully** (ignore unsupported types, or emit escalate receipt)
 - **Respect lease expiry** (don't emit `complete` hours after lease expired—use `dedupe_key` for idempotency)

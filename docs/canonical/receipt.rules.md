@@ -1,8 +1,19 @@
 # LegiVellum Receipt Protocol Rules (v1)
 
-**Status:** Normative  
-**Version:** 1.0  
-**Last Updated:** 2026-01-04
+**Status:** Normative, except where it defers  
+**Version:** 1.1  
+**Last Updated:** 2026-08-20
+
+> **Where the binding form of a rule lives.** The obligation lifecycle — which
+> states exist, which transitions are legal from which state, which are
+> contested, and which errors they raise — is defined by
+> `legivellum/schemas/transitions.v1.json`, and the principal model by
+> `authority.v1.json`. Those files are loaded by the code that evaluates
+> transitions. This document previously restated them in prose; the restatements
+> drifted and the prose kept describing a system that had been deliberately
+> changed. Sections that used to restate them now cite them instead. Field-level
+> invariants below remain normative here, because they are enforced from
+> `receipt.schema.v1.json` and this is their readable form.
 
 This document defines the normative rules for the LegiVellum Receipt Protocol v1. The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
 
@@ -37,7 +48,10 @@ Receipts are the **only** coordination protocol in LegiVellum. A receipt is an i
 ### 1.2 Phase: `complete`
 
 **Obligation Resolution:**
-- A `complete` receipt MUST resolve the obligation created by the corresponding `accepted` receipt for the same `task_id`.
+- A `complete` receipt MUST resolve the obligation named by its `obligation_id`.
+  A `task_id` groups related work and MAY carry several independent obligations
+  — fanning one task out to two reviewers creates two — so it does not identify
+  what is being discharged. Only the obligation named may be closed.
 - Completion MUST indicate the final outcome: `success`, `failure`, or `canceled`.
 
 **Required Invariants:**
@@ -55,8 +69,11 @@ Receipts are the **only** coordination protocol in LegiVellum. A receipt is an i
 **Obligation Transfer:**
 - An `escalate` receipt MUST transfer or transform responsibility across a boundary.
 - Escalation is LegiVellum's **only soft push mechanism**: the receipt is routed to `recipient_ai = escalation_to`.
-- Escalation MUST end the issuer's obligation for that specific task instance.
-- Escalation receipts do NOT require their own `complete` receipt.
+- Escalation transfers custody. It does **not** end the obligation: `ESCALATE`
+  targets `OPEN`, so the obligation survives under a new custodian.
+  Responsibility moved; it did not end, and something is still owed.
+- The obligation therefore still requires a `complete` receipt — from whoever
+  holds custody after the transfer, not from the issuer who escalated.
 
 **Routing Invariant:**
 - `recipient_ai` MUST equal `escalation_to` (this is enforced at the application level)
@@ -103,8 +120,14 @@ Receipts are the **only** coordination protocol in LegiVellum. A receipt is an i
 ### 3.1 Tenant Isolation
 
 **Server-Assigned Identity:**
-- `tenant_id` MUST be assigned by the server from authenticated context
-- `tenant_id` MUST NOT be specified by clients in API requests
+- `tenant_id` MUST be derived by the server from the authenticated principal,
+  never from the request body
+- `tenant_id` is a required receipt field, so a client necessarily sends one.
+  A submitted value that contradicts the credential MUST be refused
+  (`TENANT_MISMATCH`) rather than silently overwritten, so a caller learns its
+  claim was wrong instead of believing it was honoured. This document previously
+  said clients "MUST NOT specify" it, which contradicted
+  `receipt.schema.v1.json`, where it is one of the required fields.
 - All queries MUST be automatically filtered by the authenticated `tenant_id`
 - Receipts MUST be isolated at the database level by `tenant_id`
 
@@ -128,10 +151,24 @@ Receipts are the **only** coordination protocol in LegiVellum. A receipt is an i
 
 LegiVellum does NOT use explicit "pairing" fields. Task state is **derived** from receipt history.
 
-**Task Status Derivation:**
-- **Open:** An `accepted` receipt exists for `task_id` AND no `complete` receipt exists for the same `task_id` (within the same `tenant_id`)
-- **Resolved:** A `complete` receipt exists for `task_id` (within the same `tenant_id`)
-- **Escalated:** An `escalate` receipt exists for `task_id` (within the same `tenant_id`)
+**Obligation State Derivation:**
+
+State is per **obligation**, not per task, and the set of states and the
+transitions between them are defined by `transitions.v1.json` — see
+`obligation_states` and `transitions` there rather than a copy here.
+
+It is materialised as a projection (`custody_state`) written in the same
+transaction as the receipt that causes it, and rebuildable from the receipt
+ledger alone. The ledger remains the record; the projection is an index over it.
+
+Two properties are worth stating because they are not obvious from the state
+names:
+
+- Reaching a deadline is not a transition. An overdue obligation is still owed
+  by the same custodian; nothing has moved. `OVERDUE` is produced by an
+  operational event, never proposed as a transition.
+- A scan of receipts by `task_id` does not yield state, because one task may
+  carry several obligations.
 
 **Provenance Chains:**
 - Task relationships are tracked via `parent_task_id` and `caused_by_receipt_id`
@@ -178,13 +215,20 @@ LegiVellum does NOT use explicit "pairing" fields. Task state is **derived** fro
 All queries MUST be scoped by authenticated `tenant_id`.
 
 **Inbox (Active Obligations):**
+
+An inbox is "what do I currently owe", which is a custody question, not a scan
+for `accepted` receipts. The query above used to select every `accepted`
+receipt addressed to an agent, which returns obligations that agent has since
+completed or handed on, and misses those transferred *to* it.
+
 ```sql
-SELECT * FROM receipts
-WHERE tenant_id = ?
-  AND recipient_ai = ?
-  AND phase = 'accepted'
-  AND archived_at IS NULL
-ORDER BY stored_at DESC;
+SELECT o.*, c.state, c.custody_deadline
+FROM custody_state c
+JOIN obligations o
+  ON o.tenant_id = c.tenant_id AND o.obligation_id = c.obligation_id
+WHERE c.tenant_id = ?
+  AND c.current_custodian = ?
+  AND c.state IN ('OPEN', 'OVERDUE');
 ```
 
 **Task Timeline:**
@@ -233,7 +277,9 @@ Implementations MAY enforce these limits at the API layer before database insert
 ## 9. Validation Requirements
 
 **Schema Validation:**
-- All receipts MUST validate against `docs/canonical/receipt.schema.v1.json`
+- All receipts MUST validate against the receipt schema. The copy that runs is
+  the one packaged at `legivellum/schemas/receipt.schema.v1.json`; the copy here
+  is asserted identical to it by `LegiVellum/tests/test_protocol_package.py`
 - Schema validation MUST be performed before database insertion
 
 **Application-Level Validation:**
@@ -263,6 +309,6 @@ Implementations MAY enforce these limits at the API layer before database insert
 
 ---
 
-**Document version:** 1.0  
+**Document version:** 1.1  
 **Technomancy Laboratories**  
 **LegiVellum Project**

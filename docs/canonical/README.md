@@ -60,9 +60,23 @@ So: for **contract and alignment**, this tree is authoritative — that is what
 service's own repository is authoritative and more current. Where a service
 README here restates operational detail, treat it as secondary.
 
-Keeping both in sync is currently manual and unenforced. A change to a service's
-tool surface or configuration needs applying in both places, and nothing checks
-that it was.
+Keeping the prose copies in sync is manual and unenforced. A change to a
+service's tool surface or configuration needs applying in both places, and
+nothing checks that it was.
+
+Executable artifacts are held to a stricter rule, because drift in them is not
+merely confusing:
+
+- `receipt.schema.v1.json` is duplicated here and in the installed package, and
+  `LegiVellum/tests/test_protocol_package.py` asserts the two are identical.
+  They are.
+- Copies of ReceiptGate's DDL used to live under `ReceiptGate/schema/`. They had
+  no such test, all four drifted, and the two migrations that create the custody
+  tables were never copied at all. They have been removed in favour of a pointer
+  to the origin. See `ReceiptGate/schema/README.md`.
+
+The rule the second case suggests: do not keep a second copy of something
+executable in this tree unless a test asserts it matches the original.
 
 ## Design intent (why these exist)
 

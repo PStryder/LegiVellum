@@ -1,8 +1,8 @@
 # ReceiptGate Receipt Store Specification (MemoryGate profile)
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Normative Implementation Specification  
-**Last Updated:** 2026-01-04  
+**Last Updated:** 2026-08-20  
 **Purpose:** Define ReceiptGate's role as the passive receipt ledger for LegiVellum
 
 **Terminology Note:** ReceiptGate is the canonical receipt ledger for
@@ -59,16 +59,26 @@ This prevents:
 - Timestamp inconsistency
 - tenant_id spoofing
 
-### 3. Derived State, Not Stored State
+### 3. Derived State, Materialised as a Projection
 
-ReceiptGate does NOT maintain "task status" or "pairing" as stored fields.
+ReceiptGate does not maintain "task status" or "pairing" as an independently
+authored field. Obligation state remains *derived* — but it is materialised
+rather than recomputed per query, in `custody_state`, written in the same
+transaction as the receipt that causes it and rebuildable from the ledger alone.
+The ledger is the record; the projection is an index over it.
 
-Task state is **derived** from receipt history:
-- Open = `accepted` receipt exists AND no `complete` receipt for same `task_id`
-- Resolved = `complete` receipt exists for `task_id`
-- Escalated = `escalate` receipt exists for `task_id`
+The states and the transitions between them are defined by
+`transitions.v1.json`; this document does not restate them. Two consequences
+matter for storage:
 
-Clients reconstruct state via queries, not stored flags.
+- The projection is the queryable answer to "who owes what", so clients read it
+  rather than scanning receipt history.
+- It is keyed by `obligation_id`, not `task_id`. A scan by `task_id` cannot
+  yield state, because one task may carry several independent obligations.
+
+Deriving state by scanning receipts for a `task_id` — as earlier versions of
+this section described — returns obligations the agent has since completed or
+handed on, and misses those transferred to it.
 
 ### 4. Immutability
 
@@ -78,13 +88,30 @@ Updates are modeled as:
 - New receipts (e.g., `complete` after `accepted`)
 - Archive flag (`archived_at` timestamp)
 
-The only mutable field is `archived_at` (soft delete).
+`archived_at` is the only mutable field **on a receipt**. The `custody_state`
+projection is mutable by design and is not a receipt: it is derived from them
+and can be discarded and rebuilt.
 
 ---
 
 ## Database Schema
 
-See `/schema/receipts.sql` for the complete DDL.
+The DDL lives in the ReceiptGate repository at `ReceiptGate/schema/`, applied on
+startup by `receiptgate.db.apply_schema`. It is not reproduced here; a second
+copy is a second thing to keep true.
+
+Beyond `receipts`, two tables carry the authoritative answer to "who owes what",
+both in `006_obligations.sql`:
+
+- `obligations` — the immutable facts about one governed responsibility:
+  authorizer, beneficiary, visibility, and the receipt that opened it
+- `custody_state` — who currently owes it, until when, and in what state
+
+That file also contains the partial unique index `idx_custody_one_live_grant`,
+which permits at most one live custody grant per obligation. It is the
+mechanism, not a description of one: the exclusion is decided by the database
+rather than by a check-then-write in application code, so two concurrent
+acceptances cannot both succeed regardless of interleaving.
 
 ### Key Design Choices
 
@@ -106,7 +133,8 @@ See `/schema/receipts.sql` for the complete DDL.
 
 **Phase-Based Constraints:**
 - Database CHECK constraints enforce phase-specific invariants
-- See `schema/receipts.sql` for complete constraint definitions
+- See `ReceiptGate/schema/001_receipts.sql` and `006_obligations.sql` for the
+  complete constraint definitions
 
 ---
 

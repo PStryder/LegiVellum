@@ -26,6 +26,12 @@ from legivellum.transitions import GOVERNANCE, OPERATIONAL, IllegalTransition
 
 MODEL = transitions.load_model()
 
+# Every state the model calls terminal. Derived so these guards follow the
+# constitution instead of a hand-maintained copy of it.
+TERMINAL_STATES = sorted(
+    name for name, spec in MODEL["obligation_states"].items() if spec.get("terminal")
+)
+
 
 class TestModelShape:
     def test_model_loads_from_the_package(self):
@@ -141,7 +147,7 @@ class TestStateGuards:
             )
         assert exc.value.code == "ESCALATE_WITHOUT_ACCEPT"
 
-    @pytest.mark.parametrize("terminal", ["CLOSED", "TRANSFERRED"])
+    @pytest.mark.parametrize("terminal", TERMINAL_STATES)
     @pytest.mark.parametrize("name", ["COMPLETE", "ESCALATE"])
     def test_terminal_obligations_cannot_be_closed_again(self, name, terminal):
         with pytest.raises(IllegalTransition) as exc:
@@ -153,7 +159,7 @@ class TestStateGuards:
             )
         assert exc.value.code == "OBLIGATION_ALREADY_TERMINATED"
 
-    @pytest.mark.parametrize("terminal", ["CLOSED", "TRANSFERRED"])
+    @pytest.mark.parametrize("terminal", TERMINAL_STATES)
     def test_terminal_obligations_cannot_be_accepted(self, terminal):
         """An accepted receipt after termination used to store and vanish."""
         with pytest.raises(IllegalTransition) as exc:
@@ -336,3 +342,76 @@ class TestInvariantsAreDeclared:
         by_id = {i["id"]: i for i in MODEL["invariants"]}
         assert by_id["one-custodian"]["mechanism"] == "db_constraint"
         assert by_id["atomic-append-and-project"]["mechanism"] == "single_transaction"
+
+
+class TestEveryDeclaredStateCanOccur:
+    """A state the model declares but nothing can reach is a decorative claim.
+
+    `TRANSFERRED` was exactly that: declared here, permitted by two CHECK
+    constraints in ReceiptGate's 006_obligations.sql, targeted by no transition,
+    reachable by no operational event, and written by no code. It survived the
+    decision that custody transfer keeps an obligation OPEN under a new
+    custodian -- responsibility moves, it does not end -- which is what made it
+    unreachable.
+
+    The risk is not the unused row. It is that a reader of the constitution, or
+    of the CHECK constraint, reasonably concludes the system can express
+    "transferred away and no longer mine" when it cannot.
+    """
+
+    def _reachable(self) -> set[str]:
+        reachable = {"NONE"}  # the absence of an obligation, not a stored value
+        for transition in MODEL["transitions"]:
+            reachable.add(transition["to_state"])
+        for event in MODEL.get("operational_events", []):
+            if event.get("marks_overdue"):
+                reachable.add("OVERDUE")
+        return reachable
+
+    def test_every_declared_state_is_reachable(self):
+        declared = set(MODEL["obligation_states"])
+        unreachable = declared - self._reachable()
+        assert not unreachable, (
+            f"{sorted(unreachable)} declared but reachable by no transition and "
+            "no operational event. Either something must be able to reach it or "
+            "it must not be declared."
+        )
+
+    def test_overdue_is_reached_by_an_event_not_a_transition(self):
+        """OVERDUE is the one state a deadline produces rather than a proposal.
+
+        It is reachable, so the test above passes, but it must stay reachable
+        the *right* way: if some transition started targeting OVERDUE, a
+        deadline would have become a self-executing transition, which is the
+        thing the custody model refuses.
+        """
+        assert "OVERDUE" in MODEL["obligation_states"]
+        assert not [t for t in MODEL["transitions"] if t["to_state"] == "OVERDUE"]
+        assert [e for e in MODEL["operational_events"] if e.get("marks_overdue")]
+
+    def test_receiptgate_state_constraint_matches_the_declared_states(self):
+        """The CHECK constraint and the constitution must permit the same set.
+
+        They are two expressions of one rule, in different languages, and only
+        one of them is loaded by the code that evaluates transitions.
+        """
+        schema = (
+            Path(__file__).resolve().parents[2]
+            / "ReceiptGate" / "schema" / "006_obligations.sql"
+        )
+        if not schema.exists():
+            pytest.skip("ReceiptGate checkout not present")
+
+        import re
+
+        text = schema.read_text(encoding="utf-8")
+        match = re.search(r"CHECK \(state IN \(([^)]*)\)\)", text)
+        assert match, "no state CHECK constraint found in 006_obligations.sql"
+        constrained = set(re.findall(r"'([A-Z]+)'", match.group(1)))
+
+        # NONE is the absence of a row, so it is never a stored value.
+        declared = set(MODEL["obligation_states"]) - {"NONE"}
+        assert constrained == declared, (
+            f"CHECK permits {sorted(constrained)} but the model declares "
+            f"{sorted(declared)}"
+        )
