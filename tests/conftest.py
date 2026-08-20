@@ -1,14 +1,19 @@
-"""
-Pytest Configuration and Shared Fixtures for LegiVellum Tests
+"""Pytest configuration and shared fixtures for LegiVellum tests.
 
-Provides test database setup, fixtures, and utilities for integration testing.
+LegiVellum runs no database. It is the protocol package and the Problemata
+control plane; storage belongs to the gates, each of which owns its own.
+
+This file used to build a database containing `receipts`, `tasks`, `plans` and
+`workers` -- ReceiptGate's, AsyncGate's and DeleGate's tables -- from DDL in
+`schema/`, left over from when LegiVellum was one service. No test ever
+requested those fixtures, and one of the files they loaded had not existed for
+some time.
 """
 import pytest
 import pytest_asyncio
-import os
 import asyncio
-from typing import AsyncGenerator, Generator
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from typing import Generator
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 
@@ -16,25 +21,10 @@ from sqlalchemy import text
 # Test Database Configuration
 # =============================================================================
 
-# Use separate test database
-TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/legivellum_test"
-)
 
 # Test API keys
 TEST_TENANT_ID = "test_tenant"
 TEST_API_KEY = f"test-key-{TEST_TENANT_ID}"
-
-def _strip_sql_comments(schema_sql: str) -> str:
-    """Remove full-line SQL comments for naive statement splitting."""
-    lines = []
-    for line in schema_sql.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("--"):
-            continue
-        lines.append(line)
-    return "\n".join(lines)
 
 
 # =============================================================================
@@ -47,112 +37,6 @@ def event_loop() -> Generator:
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
-
-
-# =============================================================================
-# Database Fixtures
-# =============================================================================
-
-@pytest_asyncio.fixture(scope="session")
-async def test_engine():
-    """Create test database engine"""
-    engine = create_async_engine(
-        TEST_DATABASE_URL,
-        echo=False,
-        pool_pre_ping=True,
-    )
-
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1"))
-    except Exception as exc:
-        await engine.dispose()
-        pytest.skip(f"Test database unavailable: {exc}")
-    
-    yield engine
-    
-    await engine.dispose()
-
-
-@pytest_asyncio.fixture(scope="session")
-async def test_db_setup(test_engine):
-    """Setup test database schema"""
-    # Read schema files
-    schema_files = [
-        "schema/receipts.sql",
-        "schema/tasks.sql",
-        "schema/plans.sql",
-        "schema/workers.sql",
-    ]
-    
-    async with test_engine.begin() as conn:
-        for table in ("receipts", "tasks", "plans", "workers"):
-            await conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
-        for schema_file in schema_files:
-            if os.path.exists(schema_file):
-                with open(schema_file) as f:
-                    schema_sql = _strip_sql_comments(f.read())
-                    # Execute schema (skip comments and empty lines)
-                    for statement in schema_sql.split(";"):
-                        statement = statement.strip()
-                        if statement:
-                            await conn.execute(text(statement))
-    
-    yield
-    
-    # Cleanup after all tests
-    async with test_engine.begin() as conn:
-        await conn.execute(text("DROP TABLE IF EXISTS receipts CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS tasks CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS plans CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS workers CASCADE"))
-
-
-@pytest_asyncio.fixture
-async def test_session(test_engine, test_db_setup) -> AsyncGenerator[AsyncSession, None]:
-    """Create test database session"""
-    async_session = async_sessionmaker(
-        test_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    
-    async with async_session() as session:
-        yield session
-        await session.rollback()  # Rollback after each test
-
-
-# Fixture names that mean "this test talks to the database".
-_DB_FIXTURES = frozenset({"test_session", "test_engine", "test_db_setup"})
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def cleanup_database(request):
-    """Clean the database between tests that actually use one.
-
-    This previously depended on `test_session` directly while being autouse,
-    so every test in the repository transitively required Postgres. With no
-    database present the session-scoped engine fixture called `pytest.skip`,
-    and the *entire* suite skipped — including tests that touch nothing but
-    pure Python. A skipped suite reports green, so protocol regressions could
-    not fail CI.
-
-    Engaging only when the test requested a database fixture keeps the cleanup
-    behaviour for integration tests and lets protocol tests run anywhere.
-    """
-    if not (_DB_FIXTURES & set(request.fixturenames)):
-        yield
-        return
-
-    test_session = request.getfixturevalue("test_session")
-    yield
-
-    # Clean all tables after each test
-    await test_session.execute(text("DELETE FROM receipts"))
-    await test_session.execute(text("DELETE FROM tasks"))
-    await test_session.execute(text("DELETE FROM plans"))
-    await test_session.execute(text("DELETE FROM workers"))
-    await test_session.commit()
 
 
 # =============================================================================
